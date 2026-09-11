@@ -1,0 +1,18 @@
+{
+  "llm": {
+    "api_key": "你的 API Key（智谱 https://open.bigmodel.cn 或任意 OpenAI 兼容服务）",
+    "base_url": "https://open.bigmodel.cn/api/paas/v4",
+    "model": "glm-4.6",
+    "fast_model": "glm-4-flash",
+    "backup_model": "备用模型（主模型失败时自动切换，可留空）",
+    "backup_base_url": "https://api.deepseek.com",
+    "backup_api_key": "备用服务的 API Key（可留空）"
+  },
+  "feishu": {
+    "app_id": "cli_xxxxxxxx（飞书开放平台自建应用）",
+    "app_secret": "xxxxxxxxxxxxxxxx",
+    "folder_token": "fldxxxxxxxx（可选：你共享给应用的云文档文件夹，留空则自动新建）",
+    "auto_share_tenant": false
+  },
+  "friend_name": "树洞"
+}

@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>🌳 树洞挚友 · 把心事讲给树洞听</title>
+<link rel="stylesheet" href="/static/style.css?v=3">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌳</text></svg>">
+</head>
+<body>
+<div id="app">
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">🌳</span>
+      <div class="brand-text">
+        <b id="brand-name">树洞挚友</b>
+        <span class="sub">把心事讲给树洞听 · 记进飞书 · 越聊越懂你</span>
+      </div>
+    </div>
+    <div class="top-status">
+      <span id="pill-feishu" class="pill" title="飞书云文档连接状态">☁️ 飞书…</span>
+      <span id="pill-llm" class="pill" title="大模型连接状态">🧠 模型…</span>
+      <a id="doc-link" class="pill link" target="_blank" rel="noopener" hidden>📄 今日记录 ↗</a>
+    </div>
+    <div class="top-actions">
+      <button class="btn ghost" id="btn-persona" title="查看 TA 的人格画像">💎 画像</button>
+      <button class="btn ghost" id="btn-history" title="最近的心事">🗂 心事</button>
+      <button class="btn ghost" id="btn-settings" title="设置">⚙️</button>
+      <button class="btn primary" id="btn-new">✚ 新对话</button>
+    </div>
+  </header>
+
+  <div class="moodbar">
+    <div class="mood-now" id="mood-now">
+      <span class="mood-label">此刻</span><span class="mood-empty">——</span>
+    </div>
+    <div class="mood-spark" id="mood-spark" title="最近的情绪轨迹"></div>
+  </div>
+
+  <main id="chat" class="chat"></main>
+
+  <footer class="composer">
+    <div class="roles" id="roles"></div>
+    <div class="inputrow">
+      <textarea id="input" rows="1" placeholder="心里的话，讲给树洞听…（Enter 发送 · Shift+Enter 换行）"></textarea>
+      <button id="send" class="btn primary big">送进树洞 🌳</button>
+    </div>
+    <div class="privacy-hint">🔒 树洞只在本机运行 · 记录同步到你自己的飞书云文档</div>
+  </footer>
+</div>
+
+<!-- 人格画像抽屉 -->
+<aside id="drawer" class="drawer">
+  <div class="drawer-head">
+    <b>💎 人格画像</b>
+    <div>
+      <button class="btn ghost small" id="btn-refresh-persona">🔄 深度更新</button>
+      <button class="btn ghost small" id="btn-close-drawer">✕</button>
+    </div>
+  </div>
+  <div class="drawer-body" id="drawer-body">
+    <div class="empty">点「深度更新」让树洞读一遍最近的对话，更新对你的理解。</div>
+  </div>
+</aside>
+<div id="drawer-mask" class="drawer-mask" hidden></div>
+
+<!-- 心事列表 -->
+<aside id="history" class="history">
+  <div class="drawer-head">
+    <b>🗂 最近的心事</b>
+    <button class="btn ghost small" id="btn-close-history">✕</button>
+  </div>
+  <div class="drawer-body" id="history-body"></div>
+</aside>
+
+<!-- 设置 -->
+<div id="modal-settings" class="modal" hidden>
+  <div class="modal-card">
+    <div class="drawer-head">
+      <b>⚙️ 设置</b>
+      <button class="btn ghost small" id="btn-close-settings">✕</button>
+    </div>
+    <div class="modal-body">
+      <section>
+        <h3>🧠 对话模型（OpenAI 兼容）</h3>
+        <label>API Key<input id="set-key" type="password" placeholder="sk-…（已保存则此处留空即可）"></label>
+        <label>Base URL<input id="set-base" placeholder="https://api.deepseek.com"></label>
+        <label>主模型<input id="set-model" placeholder="deepseek-flash"></label>
+        <label>轻量模型（情绪快扫/小结）<input id="set-fast" placeholder="deepseek-flash"></label>
+        <label>备用模型（主模型失败时自动切换，可留空）<input id="set-bmodel" placeholder="glm-5.3-flash"></label>
+        <label>备用 Base URL<input id="set-bbase" placeholder="https://open.bigmodel.cn/api/paas/v4"></label>
+        <label>备用 API Key<input id="set-bkey" type="password" placeholder="sk-…（已保存则此处留空即可）"></label>
+        <button class="btn ghost small" id="btn-test-llm">测试模型</button>
+        <span class="test-result" id="test-llm-result"></span>
+      </section>
+      <section>
+        <h3>☁️ 飞书云文档</h3>
+        <p class="tip">在 <a href="https://open.feishu.cn" target="_blank" rel="noopener">飞书开放平台</a> 创建自建应用，开通
+        <code>docx:document</code> 与 <code>drive:drive</code> 权限并发布；再把你的云文档文件夹通过「··· → 添加文档应用」共享给该应用。</p>
+        <label>App ID<input id="set-fid" placeholder="cli_…"></label>
+        <label>App Secret<input id="set-fsecret" type="password"></label>
+        <label>文件夹 Token（留空则自动新建「🌳 AI树洞」）<input id="set-ftoken" placeholder="fld…"></label>
+        <label class="check"><input id="set-fshare" type="checkbox"> 自动把文档设为「组织内可编辑」（个人租户方便打开）</label>
+        <button class="btn ghost small" id="btn-test-feishu">测试飞书</button>
+        <span class="test-result" id="test-feishu-result"></span>
+      </section>
+      <section>
+        <h3>🌳 挚友昵称</h3>
+        <label>TA 怎么称呼你<input id="set-name" placeholder="树洞"></label>
+      </section>
+      <div class="modal-foot">
+        <button class="btn primary" id="btn-save-settings">保存</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script src="/static/app.js?v=3"></script>
+</body>
+</html>
