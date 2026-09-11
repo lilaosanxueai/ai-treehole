@@ -131,6 +131,7 @@ DEFAULT_PERSONA = {
     "big5": {},              # v2: {神经质: {score, confidence, plain, facets:{}}, ...}
     "signals": {},           # {low_mood/anxiety/stress: {score, trend, evidence}} 筛查信号，非诊断
     "patterns": [],          # [{name, plain, evidence}]
+    "cultural_notes": [],    # [{name, plain, evidence}] 文化语境观察（面子/人情/孝亲/表达抑制…）
     "triggers": [],
     "protective": [],
     "evidence_ledger": [],   # [{date, content, quote, domain, state_or_trait, confidence}] 上限200

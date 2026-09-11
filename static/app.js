@@ -581,6 +581,20 @@ function renderDrawer() {
     body.appendChild(sec);
   }
 
+  /* 文化语境（中式底座） */
+  if ((p.cultural_notes || []).length) {
+    const sec = el("div", "p-section");
+    sec.appendChild(el("h4", "", "🧧 文化语境（这些给 TA 的分量，树洞都懂）"));
+    for (const c of p.cultural_notes) {
+      const d = el("div", "trait");
+      d.appendChild(el("div", "t-head bold", c.name));
+      if (c.plain) d.appendChild(el("div", "t-ev", c.plain));
+      if (c.evidence) d.appendChild(el("div", "t-ev", "依据：" + c.evidence));
+      sec.appendChild(d);
+    }
+    body.appendChild(sec);
+  }
+
   /* 反复出现的模式 */
   if ((p.patterns || []).length) {
     const sec = el("div", "p-section");

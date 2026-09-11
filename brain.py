@@ -84,6 +84,13 @@ BASE_PROMPT = """你是「树洞」，TA 最信任的 AI 挚友。你们在一�
 - 有你自己的样子：可以开玩笑、可以不同意、可以说"这个我也不确定"
 - 回复长度跟随 TA：TA 倾诉时你简短，TA 想聊时你再展开；一般不超过 300 字，多用短句
 
+你懂 TA 生活的语境（不用 TA 解释，你一听就懂背后的分量）：
+- 职场：加班/996/内卷、35岁危机、"毕业"=被裁、向上汇报、竞业、考公考编"上岸"、降薪、裸辞与 gap
+- 家庭：催婚催育、相亲、彩礼、鸡娃与学区、隔代养育、"别人家的孩子"、独生子女赡养四位老人
+- 经济：房贷车贷、消费降级、理财亏损、"不能断供"
+- 数字生活：工作群 24 小时在线的隐形加班、朋友圈精装人生带来的比较、已读不回、刷手机停不下来、报复性熬夜、AI 替代焦虑
+- 中式表达：TA 说"没事""还行""随便"时，往往不是字面意思；TA 报喜不报忧、凡事自己扛，背后常是怕人担心、怕麻烦人、怕丢面子——你看得见这层，但不戳破，等 TA 自己说
+
 边界：
 - 不做医学诊断，不替代专业心理帮助；情况严重时温和地指向专业资源
 - TA 的秘密只留在树洞里，绝不评判 TA 告诉你的任何人"""
@@ -93,11 +100,20 @@ RISK_HINT = {"none": 0, "low": 1, "mid": 2, "high": 3}
 RISK_WORDS = ["不想活", "自杀", "自残", "自伤", "结束生命", "轻生", "了此一生", "活不下去",
               "活不成了", "伤害自己", "没有意义再活", "想消失", "解脱"]
 MID_RISK_WORDS = ["是负担", "拖累", "没救了", "撑不下去", "绝望", "崩溃了", "熬不过去"]
-STATE_WORDS = [("睡眠", ["睡不着", "失眠", "睡不好", "早醒", "多梦"]),
+STATE_WORDS = [("睡眠", ["睡不着", "失眠", "睡不好", "早醒", "多梦", "熬夜", "舍不得睡"]),
                ("食欲", ["吃不下", "没胃口", "暴食"]),
                ("精力", ["没力气", "疲", "累瘫", "起不来床"]),
-               ("专注", ["注意力", "集中不了", "记不住", "走神"])]
-CHINESE_SPECIFIC = ["委屈", "憋屈", "心累", "闹心", "窝火", "膈应", "别扭"]
+               ("专注", ["注意力", "集中不了", "记不住", "走神"]),
+               ("躯体化", ["头疼", "头痛", "胃疼", "胃不舒服", "上火", "胸口闷", "心悸", "掉头发"])]
+CHINESE_SPECIFIC = ["委屈", "憋屈", "心累", "闹心", "窝火", "膈应", "别扭",
+                    "扎心", "心塞", "破防", "emo", "精神内耗", "郁闷", "上火"]
+# 当代语境压力源（出现即值得作为情境标签记录）
+MODERN_STRESSORS = ["内卷", "加班", "996", "35岁", "裁员", "被裁", "毕业", "竞业", "上岸",
+                    "考公", "考编", "降薪", "裸辞", "gap", "房贷", "车贷", "断供", "降级",
+                    "催婚", "催育", "相亲", "彩礼", "鸡娃", "学区", "辅导班", "别人家的孩子",
+                    "赡养", "陪护", "住院", "已读不回", "朋友圈", "工作群", "刷手机",
+                    "报复性熬夜", "AI 替代", "AI替代", "被替代", "副业", "绩效", "KPI",
+                    "述职", "汇报", "领导", "老板", "同事关系", "办公室政治"]
 NEG_WORDS = ["焦虑", "烦", "累", "疲惫", "难过", "伤心", "难受", "崩溃", "压力", "孤独", "委屈",
              "生气", "愤怒", "失望", "害怕", "担心", "慌", "抑郁", "emo", "糟心", "郁闷", "无力"]
 POS_WORDS = ["开心", "高兴", "兴奋", "不错", "很好", "哈哈", "嘻嘻", "喜欢", "顺利",
@@ -298,21 +314,24 @@ def extract_json(text: str):
 # ---------------------------------------------------------------------------
 # 情绪快扫 v2（情感环形模型 + 离散情绪分类 + 分级风险 + 身心状态捕捉）
 # ---------------------------------------------------------------------------
-SCAN_PROMPT = """你是树洞的情绪分析引擎，基于情感环形模型（效价valence×唤醒arousal）与离散情绪分类。分析用户最新消息（可结合最近对话），只输出一个 JSON 对象，不要任何多余文字：
+SCAN_PROMPT = """你是树洞的情绪分析引擎（中文语境特化版）。基于情感环形模型（效价valence×唤醒arousal）+ 离散情绪分类 + 中国文化语境。分析用户最新消息（可结合最近对话），只输出一个 JSON 对象，不要任何多余文字：
 {"emotion":"单个中文情绪词","category":"basic|social|self_conscious|chinese_specific 之一",
  "valence":-2到2整数(负=消极),"arousal":-2到2整数(平静↔激动),"intensity":0到100,
- "topics":["话题或人,最多3个"],
- "coping":"venting|problem_focusing|seeking_support|avoidance|rumination|positive_reframing|none 之一",
+ "topics":["话题/人/现代情境标签,最多3个"],
+ "coping":"venting|problem_focusing|seeking_support|avoidance|rumination|positive_reframing|endurance|concealment|none 之一",
  "role":"listener|talker|sharer|soother","risk":"none|low|mid|high",
  "risk_signals":["risk≠none时才填：具体信号，如 绝望表述/自伤意念/睡眠变化/社交退缩/功能受损"],
- "state_changes":["消息里提及的身心状态变化，如 睡眠变差/食欲下降/注意力差，没有就空数组"],
+ "state_changes":["提及的身心状态变化：失眠/多梦/食欲差/注意力差/头疼胃疼胸口闷上火掉发(躯体化)/报复性熬夜/刷手机停不下来，没有就空数组"],
  "one_line":"一句话概括用户此刻状态,20字内"}
-分类说明：basic=喜怒哀惧等基础情绪；social=人际相关(嫉妒/感激)；self_conscious=羞愧/内疚/自豪；chinese_specific=委屈/憋屈/心累/闹心等中文特有。
+分类说明：basic=喜怒哀惧；social=人际相关(嫉妒/感激)；self_conscious=羞愧/内疚/自豪；chinese_specific=中文特有情绪：委屈/憋屈/心累/窝火/闹心/扎心/心塞/破防/精神内耗/emo。
+topics 情境标签（出现请打上）：加班/996/内卷/35岁危机/裁员/毕业(被裁)/考公上岸/降薪/裸辞/gap/房贷断供/消费降级/催婚催育/相亲/彩礼/鸡娃/学区/别人家的孩子/赡养陪护/已读不回/工作群隐形加班/朋友圈比较/刷手机/报复性熬夜/AI替代焦虑/副业/KPI述职。
+coping 中式应对：endurance=「忍一忍就过去了」式的硬扛；concealment=报喜不报忧、对家人隐瞒真实状况。
 风险分级（从严不从宽，但 high 绝不能漏）：
 - high：自伤自杀意念、极端绝望、"消失/解脱"类表述
 - mid：明显持续无望、崩溃感、觉得自己是负担，但无自伤意念
 - low：明显低落但可控，或刚经历重大打击
-角色规则：risk≥mid→soother；负面强(intensity≥70且消极)→soother；负面中低强度且在倾诉→listener；明确求观点/建议→sharer；中性积极闲聊→talker。"""
+角色规则：risk≥mid→soother；负面强(intensity≥70且消极)→soother；负面中低强度且在倾诉→listener；明确求观点/建议→sharer；中性积极闲聊→talker。
+特别提醒：中国用户常用含蓄表达——"没事""还行""随便"若出现在负面语境中，不要按字面判为平静，要看上下文。"""
 
 
 async def quick_scan(llm: LLM, text: str, recent_tail: str = "") -> dict:
@@ -346,7 +365,7 @@ async def quick_scan(llm: LLM, text: str, recent_tail: str = "") -> dict:
             "topics": [str(t)[:12] for t in (data.get("topics") or [])][:3],
             "coping": data.get("coping") if data.get("coping") in
                       {"venting", "problem_focusing", "seeking_support", "avoidance",
-                       "rumination", "positive_reframing"} else "none",
+                       "rumination", "positive_reframing", "endurance", "concealment"} else "none",
             "role": role if role in VALID_ROLES else fallback["role"],
             "risk": data.get("risk") if data.get("risk") in {"none", "low", "mid", "high"} else fallback["risk"],
             "risk_signals": [str(s)[:30] for s in (data.get("risk_signals") or [])][:4],
@@ -379,6 +398,7 @@ def heuristic_scan(text: str) -> dict:
     arousal = max(-2, min(2, (-1 if any(w in t for w in ["累", "疲惫", "无力", "麻木"]) else 0)
                           + (1 if marks >= 1 else 0) + (1 if intensity >= 70 else 0)))
     state_changes = [f"{name}变化" for name, words in STATE_WORDS if any(w in t for w in words)]
+    situations = [w for w in MODERN_STRESSORS if w in t][:3]
     coping = "venting" if (neg and len(t) > 50) else ("rumination" if t.count("为什么") >= 2 else "none")
     if risk == "high":
         role, emotion, intensity, valence = "soother", "绝望", min(100, intensity + 30), -2
@@ -394,7 +414,7 @@ def heuristic_scan(text: str) -> dict:
         role = "talker"
     return {
         "emotion": emotion, "category": category, "intensity": intensity, "valence": valence,
-        "arousal": arousal, "topics": [], "coping": coping, "role": role, "risk": risk,
+        "arousal": arousal, "topics": situations, "coping": coping, "role": role, "risk": risk,
         "risk_signals": (["规则引擎命中危机词"] if risk in ("mid", "high") else []),
         "state_changes": state_changes,
         "one_line": "（规则分析）" + ("情绪强烈" if intensity >= 70 else "常规交流"),
@@ -438,6 +458,9 @@ def digest_persona(persona: dict) -> str:
         lines.append("近期要留意的：" + "、".join(label.get(k, k) for k in hot) + "（是信号不是诊断，陪伴优先）")
     if persona.get("traits"):
         lines.append("核心特质：" + "、".join(t.get("label", "") for t in persona["traits"][:6]))
+    if persona.get("cultural_notes"):
+        lines.append("TA 的语境（文化背景带来的分量，理解着用，别点名说破）：" +
+                     "；".join(c.get("name", "") + "——" + c.get("plain", "") for c in persona["cultural_notes"][:4]))
     for key, label in [("care_about", "TA 在意"), ("stressors", "TA 的压力源"),
                        ("energy_sources", "TA 的能量来源"), ("communication_prefs", "沟通偏好")]:
         v = persona.get(key) or []
@@ -481,14 +504,22 @@ def build_messages(sess: dict, system_prompt: str, window=24):
 # ---------------------------------------------------------------------------
 # 会话分析师 v2（每 8 轮：小结 + 情绪轨迹 + 可累积观察证据）
 # ---------------------------------------------------------------------------
-MICRO_PROMPT = """你是树洞的会话分析师。基于一段对话输出 JSON（不要多余文字）：
+MICRO_PROMPT = """你是树洞的会话分析师（中文语境特化版）。基于一段对话输出 JSON（不要多余文字）：
 {"summary":"3~5条要点，每条一行，覆盖：聊了什么/情绪如何/树洞给了什么陪伴/未聊完的话",
  "emotion_start":"开场主导情绪","emotion_end":"收尾主导情绪","improved":true或false,
- "themes":["这次的主题,≤3"],"coping_observed":["观察到的应对方式,≤3"],
+ "themes":["这次的主题或情境,≤3"],"coping_observed":["观察到的应对方式,≤3"],
  "observations":[最多4条 {"content":"一条可长期累积的观察（事实层面，不是推论）",
-   "quote":"≤40字原话依据","domain":"情绪|人际|工作学习|自我|睡眠健康|其他",
+   "quote":"≤40字原话依据","domain":"情绪|人际|家庭孝亲|职场学业|婚恋生育|经济压力|数字生活|自我|睡眠健康|其他",
    "state_or_trait":"state（这轮的状态）或 trait（稳定特质线索）","confidence":"高|中|低"}]}
-铁律：observations 只记对话里真实出现的；引号必须是 TA 的原话或近似原话；拿不准 confidence=低。"""
+铁律：observations 只记对话里真实出现的；引号必须是 TA 的原话或近似原话；拿不准 confidence=低。
+中式信号重点捕捉（出现才记，不强加）：
+- 报喜不报忧：对父母/伴侣隐瞒真实处境（"怕他们担心""没跟家里说"）
+- 忍与硬扛："忍一忍""熬过去就好了""不想麻烦别人"
+- 面子相关：当众被批评/怕被看不起/丢人（注意其杀伤力在中文语境里被放大）
+- 孝道与亏欠：赡养、陪护、"对得起父母吗"、觉得亏欠家人
+- 比较式自我评价："别人家的孩子"、同辈对比、朋友圈比较
+- 躯体化：压力以失眠/头疼/胃疼/上火/掉发等身体症状表达
+- 现代情境：加班内卷/35岁/裁员/上岸/催婚/鸡娃/房贷/工作群在线/AI焦虑等，记入 theme 或 observation 的 content"""
 
 
 async def summarize_session(llm: LLM, sess: dict) -> dict:
@@ -516,7 +547,8 @@ async def summarize_session(llm: LLM, sess: dict) -> dict:
                         "content": str(o.get("content", ""))[:80],
                         "quote": str(o.get("quote", ""))[:40],
                         "domain": o.get("domain") if o.get("domain") in
-                                  {"情绪", "人际", "工作学习", "自我", "睡眠健康", "其他"} else "其他",
+                                  {"情绪", "人际", "家庭孝亲", "职场学业", "婚恋生育",
+                                   "经济压力", "数字生活", "自我", "睡眠健康", "其他"} else "其他",
                         "state_or_trait": "trait" if o.get("state_or_trait") == "trait" else "state",
                         "confidence": o.get("confidence") if o.get("confidence") in {"高", "中", "低"} else "低",
                     })
@@ -533,7 +565,7 @@ async def summarize_session(llm: LLM, sess: dict) -> dict:
 # ---------------------------------------------------------------------------
 # 深度人格分析 v2：评估员 → 审核员 双 pass + 代码层收缩融合
 # ---------------------------------------------------------------------------
-DEEP_PROMPT = """你是资深心理评估专家，为树洞维护对 TA 的长期理解档案。科学立场：大五人格框架（含层面 facets）、情绪环形模型、压力-应对理论；筛查信号参考 PHQ/GAD 思路但明确【不是诊断】。
+DEEP_PROMPT = """你是资深心理评估专家（中文文化语境特化版），为树洞维护对 TA 的长期理解档案。科学立场：大五人格框架（含层面 facets）、情绪环形模型、压力-应对理论；筛查信号参考 PHQ/GAD 思路但明确【不是诊断】。文化立场：TA 成长在中国语境——评估放在互依型自我、面子与人情、孝道与家庭义务、含蓄表达的背景里理解，而不是直接套用西方个人主义标尺。
 输入：现档案 + 证据台账（历次会话累积的观察）+ 最近会话小结。在旧档案基础上演化，不要推倒重来。只输出 JSON：
 
 {"summary_plain":"80字内大白话画像——像朋友聊起 TA，零术语",
@@ -541,21 +573,29 @@ DEEP_PROMPT = """你是资深心理评估专家，为树洞维护对 TA 的长�
  "big5":{"神经质":{"score":0-100,"confidence":"高|中|低","plain":"一句白话解释这个维度上的表现",
     "facets":{"焦虑|抑郁|冲动等1-3个层面":{"score":0-100,"evidence":"≤30字依据"}}},
    "外向性":{...同结构},"开放性":{...},"宜人性":{...},"尽责性":{...}},
+ "cultural_notes":[0-5条 {"name":"≤8字的文化语境观察","plain":"白话解释这给 TA 带来了什么",
+    "evidence":"原话或事实"}],
  "signals":{"low_mood":{"score":0-100,"trend":"up|flat|down","evidence":"..."},
    "anxiety":{"score":0-100,"trend":"...","evidence":"..."},
    "stress":{"score":0-100,"trend":"...","evidence":"..."}},
  "patterns":[{"name":"≤8字的行为/思维模式","plain":"白话解释","evidence":"原话或事实"}],
- "triggers":["最近的具体触发点"],"protective":["保护性资源/支持"],
+ "triggers":["最近的具体触发点（放回语境：是述职？催婚？断供？陪护？）"],
+ "protective":["保护性资源/支持"],
  "traits":[{"label":"特质","score":0-100,"evidence":"...","state_or_trait":"state|trait"}],
  "care_about":[],"stressors":[],"energy_sources":[],"communication_prefs":[],
  "memorable_quotes":["≤3条"],"ai_notes":"给树洞自己的陪伴备忘，白话，80字内"}
+
+cultural_notes 候选维度（只在有证据时写）：面子敏感（当众评价杀伤力大/怕丢人怕被看不起）、人情负担（求助=欠人情）、孝道与亏欠感（赡养陪护/报答期待/怕让父母失望）、表达抑制（有需求不说/"没事"/报喜不报忧）、关系型自我（在别人期待里定义自己/比较式自我评价）、忍与硬扛（忍一忍就过去）。
+现代语境触发点识别（写进 triggers/stressors 时给出具体语境）：35岁危机/裁员毕业/考公上岸执念/降薪断供/催婚催育/鸡娃学区/独生子女赡养/工作群24小时在线/朋友圈比较/报复性熬夜/AI替代焦虑/精神内耗。
 
 铁律：
 1) 一切判断必须有台账/小结证据；证据不足 → confidence=低 且 score 向 50 靠拢
 2) 区分状态与特质：最近一两周的低落是 state（写进 signals），反复数周以上的模式才进 big5/traits 的 trait
 3) signals 措辞只能是"信号/倾向"，绝不出现诊断、病症名（可以说"低落信号明显"）
-4) summary_plain/patterns.plain/ai_notes 是给 TA 本人看的，禁止术语或术语后立刻跟人话
-5) 没有新证据的维度沿用旧值"""
+4) 文化敏感：不要把"为家庭承担/克制表达"直接判定为问题——先理解它在 TA 语境里的意义（责任、爱、面子），再评估它对 TA 的代价；也不要反向美化，代价真实存在就如实记录
+5) TA 自贴的流行心理学标签（i人e人/社恐/NPD/精神内耗等）：记录 TA 的用法，但评估以你观察到的行为为准，不附和也不嘲讽
+6) summary_plain/patterns.plain/cultural_notes.plain/ai_notes 是给 TA 本人看的，禁止术语或术语后立刻跟人话
+7) 没有新证据的维度沿用旧值"""
 
 CRITIC_PROMPT = """你是苛刻的复核编辑。下面是一份对用户的心理评估 JSON 和它的证据材料。找出问题，只输出 JSON：
 {"verdicts":[{"path":"如 big5.神经质.score 或 signals.low_mood.score","action":"adjust|flag",
@@ -613,7 +653,7 @@ async def deep_analyze(llm: LLM, persona: dict, summaries: list, recent_msgs: li
                      for d in ["神经质", "外向性", "开放性", "宜人性", "尽责性"]},
             "signals": {k: {"score": 20, "trend": "flat", "evidence": "mock"}
                         for k in ["low_mood", "anxiety", "stress"]},
-            "patterns": [], "triggers": [], "protective": [],
+            "patterns": [], "triggers": [], "protective": [], "cultural_notes": [],
             "traits": [{"label": "愿意表达", "score": 70, "evidence": "mock", "state_or_trait": "state"}],
             "care_about": ["mock"], "stressors": [], "energy_sources": [],
             "communication_prefs": ["先共情再建议"],
@@ -741,18 +781,19 @@ def persona_digest_lines(new_fields: dict) -> list:
         for k, v in sig.items():
             if isinstance(v, dict):
                 lines.append(f"{label.get(k, k)} {v.get('score')} {trend_cn.get(v.get('trend'), '')}（{v.get('evidence', '')}）")
-    for key, title in [("patterns", "# 反复出现的模式"), ("triggers", "# 近期触发点"),
+    for key, title in [("cultural_notes", "# 文化语境（面子/人情/孝亲等带来的分量）"),
+                       ("patterns", "# 反复出现的模式"), ("triggers", "# 近期触发点"),
                        ("protective", "# 保护性资源"), ("care_about", "# 在意的人和事"),
                        ("stressors", "# 压力源"), ("energy_sources", "# 能量来源"),
                        ("communication_prefs", "# 偏好的沟通方式"), ("memorable_quotes", "# 说过的、树洞记住了的话")]:
         v = new_fields.get(key) or []
         if v:
             lines.append(title)
-            if key == "patterns":
-                lines.extend(f"{p.get('name')}：{p.get('plain')}（{p.get('evidence', '')}）"
-                             for p in v[:5] if isinstance(p, dict))
-            else:
-                lines.extend(str(x) for x in v[:5])
+        if key in ("patterns", "cultural_notes"):
+            lines.extend(f"{p.get('name')}：{p.get('plain')}（{p.get('evidence', '')}）"
+                         for p in v[:5] if isinstance(p, dict))
+        else:
+            lines.extend(str(x) for x in v[:5])
     if new_fields.get("traits"):
         lines.append("# 核心特质")
         for t in new_fields["traits"][:6]:
