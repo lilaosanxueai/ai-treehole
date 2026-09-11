@@ -320,6 +320,44 @@ class Feishu:
         store.save_state(st)
         return doc
 
+    def send_im(self, chat_id: str, text: str):
+        """给飞书会话（群/机器人对话）发文本消息：主动关怀、周报推送用"""
+        if MOCK:
+            log.info("[MOCK 飞书] IM → %s: %s", chat_id, text[:40])
+            return True
+        try:
+            self._api(
+                "POST", "/im/v1/messages",
+                params={"receive_id_type": "chat_id"},
+                body={
+                    "receive_id": chat_id,
+                    "msg_type": "text",
+                    "content": json.dumps({"text": text}, ensure_ascii=False),
+                },
+            )
+            return True
+        except Exception as e:
+            log.warning("飞书 IM 推送失败: %s", e)
+            return False
+
+    def weekly_report_blocks(self, range_label, stats, persona_summary, highlights):
+        """情绪周报 → 文档块"""
+        blocks = [heading_block(f"🌳 树洞周报 · {range_label}", 2)]
+        blocks.append(text_block([run(f"这七天里，你们聊了 {stats['turns']} 轮、{stats['sessions']} 次坐进树洞。", bold=True)]))
+        blocks.append(heading_block("🌡️ 情绪曲线", 3))
+        blocks.append(bullet_block(f"出现最多的情绪：{stats['top_emotions']}"))
+        blocks.append(bullet_block(f"整体基调：{stats['tone']}（均值 {stats['avg_valence']}，前半段 {stats['val_first']} → 后半段 {stats['val_last']}）"))
+        blocks.append(bullet_block(f"平均情绪强度：{stats['avg_intensity']}/100"))
+        blocks.append(heading_block("🌱 画像此刻", 3))
+        blocks.append(text_block([run(persona_summary or "（画像还在慢慢成形）")]))
+        if highlights:
+            blocks.append(heading_block("📌 这一周的小事", 3))
+            for h in highlights:
+                blocks.append(bullet_block(h))
+        blocks.append(text_block([run("—— 树洞会一直在这儿，随时回来坐坐。", italic=True)]))
+        blocks.append(divider_block())
+        return blocks
+
     # ---- 块写入 ------------------------------------------------------------
     def append_blocks(self, doc_id: str, blocks: list):
         """追加块到文档末尾（页块 id 即 document_id），每次最多 20 块"""

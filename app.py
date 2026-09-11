@@ -20,7 +20,7 @@ if sys.stdout and hasattr(sys.stdout, "reconfigure"):
 import uvicorn
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
@@ -42,6 +42,7 @@ DEFAULT_CONFIG = {
         "base_url": "https://open.bigmodel.cn/api/paas/v4",
         "model": "glm-4.6",
         "fast_model": "glm-4-flash",
+        "thinking_mode": "smart",  # smart=轻任务关思考(快) 重任务开 | always | never
         "backup_api_key": "",
         "backup_base_url": "https://open.bigmodel.cn/api/paas/v4",
         "backup_model": "",
@@ -51,6 +52,11 @@ DEFAULT_CONFIG = {
         "app_secret": "",
         "folder_token": "",
         "auto_share_tenant": False,
+        "notify_chat_id": "",  # 主动关怀/周报推送的飞书会话（可留空）
+    },
+    "server": {
+        "lan": False,          # 手机等局域网设备访问
+        "access_token": "",    # 局域网访问令牌（开启 lan 时自动生成）
     },
     "friend_name": "树洞",
 }
@@ -61,13 +67,21 @@ def load_config() -> dict:
     if CONFIG_FILE.exists():
         try:
             user = json.loads(CONFIG_FILE.read_text(encoding="utf-8"))
-            for section in ("llm", "feishu"):
+            for section in ("llm", "feishu", "server"):
                 if isinstance(user.get(section), dict):
                     cfg[section].update({k: v for k, v in user[section].items()})
             if user.get("friend_name"):
                 cfg["friend_name"] = user["friend_name"]
         except Exception as e:
             log.warning("config.json 解析失败，用默认配置: %s", e)
+    # 局域网开启时保证有访问令牌
+    if cfg["server"].get("lan") and not cfg["server"].get("access_token"):
+        import secrets
+        cfg["server"]["access_token"] = secrets.token_hex(4)
+        try:
+            Path(CONFIG_FILE).write_text(json.dumps(cfg, ensure_ascii=False, indent=2), encoding="utf-8")
+        except Exception:
+            pass
     return cfg
 
 
@@ -89,11 +103,64 @@ async def lifespan(_app: FastAPI):
     writer.start()
     log.info("树洞已苏醒 · 模型=%s 飞书=%s", llm.model if llm.ready else "未配置",
              "已配置" if (fs.enabled or feishu.MOCK) else "未配置")
+    care_task = asyncio.get_event_loop().create_task(_care_loop())
     yield
+    care_task.cancel()
     await writer.flush()
 
 
 app = FastAPI(title="AI 树洞挚友", lifespan=lifespan)
+
+
+# ---------------------------------------------------------------------------
+# 局域网访问令牌：lan 开启时 /api/* 需带 X-Treehole-Token 头或 ?t= 查询参数
+# ---------------------------------------------------------------------------
+OPEN_PATHS = {"/api/lan", "/api/lan_bad"}
+
+
+@app.middleware("http")
+async def token_guard(request, call_next):
+    if CFG["server"].get("lan"):
+        p = request.url.path
+        if p.startswith("/api") and p not in OPEN_PATHS:
+            supplied = request.headers.get("x-treehole-token") or request.query_params.get("t", "")
+            if supplied != CFG["server"].get("access_token"):
+                return JSONResponse({"detail": "缺少或错误的访问令牌"}, status_code=401)
+    return await call_next(request)
+
+
+def _lan_ip() -> str:
+    import socket
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("10.255.255.255", 1))
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return "127.0.0.1"
+
+
+@app.get("/api/lan")
+async def api_lan():
+    """局域网信息：手机扫码/输地址用（此接口本身不带令牌）"""
+    lan_on = bool(CFG["server"].get("lan"))
+    out = {"lan": lan_on, "need_token": lan_on}
+    if lan_on:
+        out["url"] = f"http://{_lan_ip()}:{PORT}/"
+        out["token"] = CFG["server"].get("access_token", "")
+    return out
+
+
+@app.get("/api/qr")
+async def api_qr():
+    """局域网地址的二维码（SVG），仅 lan 开启时可用"""
+    if not CFG["server"].get("lan"):
+        raise HTTPException(400, "局域网访问未开启")
+    import segno
+    url = f"http://{_lan_ip()}:{PORT}/?t={CFG['server'].get('access_token', '')}"
+    svg = segno.make(url, error="m").svg_data_uri(scale=6)
+    return {"url": url, "svg": svg}
 
 
 # ---------------------------------------------------------------------------
@@ -299,6 +366,130 @@ async def _finalize(session_id: str, doc: dict):
 
 
 # ---------------------------------------------------------------------------
+# 主动关怀 + 情绪周报
+# ---------------------------------------------------------------------------
+from datetime import datetime, timedelta
+
+
+def _parse_ts(s):
+    try:
+        return datetime.strptime(s, "%Y-%m-%d %H:%M:%S")
+    except Exception:
+        return None
+
+
+def _weekly_stats():
+    """近 7 天情绪与会话统计"""
+    persona = store.load_persona()
+    cutoff = datetime.now() - timedelta(days=7)
+    logs = [m for m in persona.get("mood_log", [])
+            if (t := _parse_ts(m.get("ts", ""))) and t >= cutoff]
+    sessions = [s for s in store.list_sessions(200)
+                if (t := _parse_ts(s.get("started", ""))) and t >= cutoff]
+    turns = sum(s.get("turns", 0) for s in sessions)
+    if logs:
+        cnt = {}
+        for m in logs:
+            cnt[m["emotion"]] = cnt.get(m["emotion"], 0) + 1
+        top = "、".join(f"{k}×{v}" for k, v in sorted(cnt.items(), key=lambda x: -x[1])[:3])
+        avg_v = round(sum(m.get("valence", 0) for m in logs) / len(logs), 2)
+        avg_i = round(sum(m.get("intensity", 0) for m in logs) / len(logs))
+        half = len(logs) // 2 or 1
+        v1 = round(sum(m.get("valence", 0) for m in logs[:half]) / half, 2)
+        v2 = round(sum(m.get("valence", 0) for m in logs[half:]) / max(len(logs) - half, 1), 2)
+        tone = "偏沉一些" if avg_v < -0.6 else "整体平稳" if avg_v < 0.4 else "亮着光"
+    else:
+        top, avg_v, avg_i, v1, v2, tone = "—", 0, 0, 0, 0, "还没有记录"
+    highlights = [f"{s['started'][5:16]}（{s['title'] or '树洞时刻'}）：{s['summary'].splitlines()[0]}"
+                  for s in sessions if s.get("summary")][:5]
+    return {
+        "sessions": len(sessions), "turns": turns,
+        "top_emotions": top, "avg_valence": avg_v, "avg_intensity": avg_i,
+        "val_first": v1, "val_last": v2, "tone": tone,
+        "highlights": highlights,
+    }
+
+
+async def generate_weekly_report(push: bool = True) -> dict:
+    """生成《树洞周报》文档（+可选 IM 推送摘要）"""
+    stats = _weekly_stats()
+    persona = store.load_persona()
+    now = datetime.now()
+    label = f"{(now - timedelta(days=6)).strftime('%m.%d')}–{now.strftime('%m.%d')}"
+    doc = await asyncio.to_thread(fs.create_doc, f"🌳 树洞周报 · {label}", True)
+    blocks = fs.weekly_report_blocks(label, stats, persona.get("summary", ""), stats["highlights"])
+    await writer.enqueue(doc["token"], blocks, label="weekly")
+    st = store.load_state()
+    st["last_report_week"] = f"{now.isocalendar().year}-{now.isocalendar().week}"
+    store.save_state(st)
+    pushed = False
+    chat_id = CFG["feishu"].get("notify_chat_id", "")
+    if push and chat_id:
+        pushed = await asyncio.to_thread(
+            fs.send_im, chat_id,
+            f"🌳 树洞周报 · {label}\n这七天聊了 {stats['turns']} 轮 · 情绪基调：{stats['tone']}\n{doc['url']}"
+        )
+    return {"ok": True, "url": doc["url"], "stats": stats, "pushed": pushed}
+
+
+@app.post("/api/report/weekly")
+async def api_weekly_report():
+    try:
+        return await generate_weekly_report()
+    except Exception as e:
+        return {"ok": False, "msg": str(e)[:200]}
+
+
+CARE_HELLOS = [
+    "🌳 好几天没听见你的声音了，树洞一直给你留着位置。想来坐坐随时来。",
+    "🌳 最近还好吗？不忙的时候，树洞想听你说说话。",
+    "🌳 无论这阵子过得顺不顺，树洞都在老地方。",
+]
+CARE_LOWMOOD = [
+    "🌳 这几次聊天里，你好像都挺沉的。不用硬撑，想说话的时候我都在。如果很难受，心理援助热线 12356 随时可以打。",
+]
+
+
+async def _care_loop():
+    """每 30 分钟巡检：久未来访 / 持续低落 → 飞书轻问候；周日 20 点出周报"""
+    await asyncio.sleep(60)
+    while True:
+        try:
+            chat_id = CFG["feishu"].get("notify_chat_id", "")
+            st = store.load_state()
+            now = datetime.now()
+            if chat_id and fs.enabled:
+                # 久未来访（>3 天有历史会话才提醒）
+                sessions = store.list_sessions(200)
+                if sessions:
+                    last = _parse_ts(sessions[0]["started"])
+                    lc = _parse_ts(st.get("last_care_ts", "") or "2000-01-01 00:00:00")
+                    if last and (now - last) > timedelta(days=3) and (now - lc) > timedelta(days=3):
+                        await asyncio.to_thread(fs.send_im, chat_id,
+                                                CARE_HELLOS[now.hour % len(CARE_HELLOS)])
+                        st["last_care_ts"] = store.now_iso()
+                        store.save_state(st)
+                    # 持续低落（近 14 条均值 valence ≤ -1.2，跨度 >2 天）
+                    persona = store.load_persona()
+                    logs = persona.get("mood_log", [])[-14:]
+                    lm = _parse_ts(st.get("last_lowcare_ts", "") or "2000-01-01 00:00:00")
+                    if len(logs) >= 6:
+                        a, b = _parse_ts(logs[0]["ts"]), _parse_ts(logs[-1]["ts"])
+                        avg = sum(m.get("valence", 0) for m in logs) / len(logs)
+                        if a and b and (b - a) > timedelta(days=2) and avg <= -1.2 and (now - lm) > timedelta(days=7):
+                            await asyncio.to_thread(fs.send_im, chat_id, CARE_LOWMOOD[0])
+                            st["last_lowcare_ts"] = store.now_iso()
+                            store.save_state(st)
+            # 周日 20 点自动周报
+            week_key = f"{now.isocalendar().year}-{now.isocalendar().week}"
+            if now.weekday() == 6 and now.hour >= 20 and st.get("last_report_week") != week_key:
+                await generate_weekly_report()
+        except Exception as e:
+            log.warning("关怀巡检失败: %s", e)
+        await asyncio.sleep(1800)
+
+
+# ---------------------------------------------------------------------------
 # 人格画像
 # ---------------------------------------------------------------------------
 async def refresh_persona_internal() -> dict:
@@ -347,6 +538,7 @@ async def api_persona_refresh():
 class ConfigIn(BaseModel):
     llm: dict = {}
     feishu: dict = {}
+    server: dict = {}
     friend_name: str = ""
 
 
@@ -363,6 +555,7 @@ async def api_get_config():
             "base_url": CFG["llm"].get("base_url", ""),
             "model": CFG["llm"].get("model", ""),
             "fast_model": CFG["llm"].get("fast_model", ""),
+            "thinking_mode": CFG["llm"].get("thinking_mode", "smart"),
             "backup_api_key": mask(CFG["llm"].get("backup_api_key")),
             "has_backup_key": bool(CFG["llm"].get("backup_api_key")),
             "backup_base_url": CFG["llm"].get("backup_base_url", ""),
@@ -374,6 +567,11 @@ async def api_get_config():
             "has_secret": bool(CFG["feishu"].get("app_secret")),
             "folder_token": CFG["feishu"].get("folder_token", ""),
             "auto_share_tenant": bool(CFG["feishu"].get("auto_share_tenant")),
+            "notify_chat_id": CFG["feishu"].get("notify_chat_id", ""),
+        },
+        "server": {
+            "lan": bool(CFG["server"].get("lan")),
+            "access_token": CFG["server"].get("access_token", ""),
         },
         "friend_name": CFG.get("friend_name", "树洞"),
     }
@@ -390,7 +588,7 @@ async def api_config(body: ConfigIn):
     # 脱敏值/含掩码的输入不覆盖真实密钥（前端回填的是脱敏值，直连 API 也拦住）
     SECRET_FIELDS = [("llm", "api_key"), ("llm", "backup_api_key"), ("feishu", "app_secret")]
     current = {(s, k): CFG[s].get(k, "") for s, k in SECRET_FIELDS}
-    for section in ("llm", "feishu"):
+    for section in ("llm", "feishu", "server"):
         incoming = getattr(body, section) or {}
         for k, v in incoming.items():
             if k not in DEFAULT_CONFIG[section]:
@@ -401,6 +599,9 @@ async def api_config(body: ConfigIn):
             CFG[section][k] = v
     if body.friend_name.strip():
         CFG["friend_name"] = body.friend_name.strip()
+    if CFG["server"].get("lan") and not CFG["server"].get("access_token"):
+        import secrets
+        CFG["server"]["access_token"] = secrets.token_hex(4)
     save_config(CFG)
     llm = LLM(CFG["llm"])
     fs = feishu.Feishu(CFG["feishu"])
@@ -451,4 +652,8 @@ if __name__ == "__main__":
     if not feishu.MOCK and "--no-browser" not in sys.argv:
         import webbrowser
         webbrowser.open(f"http://127.0.0.1:{PORT}")
-    uvicorn.run(app, host="127.0.0.1", port=PORT, log_level="info")
+    host = "0.0.0.0" if CFG["server"].get("lan") else "127.0.0.1"
+    if CFG["server"].get("lan"):
+        log.info("局域网访问已开启: http://%s:%s/ 令牌 %s（首次会弹防火墙授权）",
+                 _lan_ip(), PORT, CFG["server"].get("access_token"))
+    uvicorn.run(app, host=host, port=PORT, log_level="info")

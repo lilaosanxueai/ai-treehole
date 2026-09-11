@@ -489,6 +489,21 @@ textarea#skin-css {
 .test-result { font-size: 12px; margin-left: 8px; color: var(--muted); }
 .modal-foot { display: flex; justify-content: flex-end; gap: 10px; padding-top: 6px; border-top: 1px solid var(--line); }
 
+/* ---------- 语音麦克风 & 二维码 ---------- */
+.btn.mic { font-size: 17px; padding: 9px 12px; border-radius: 12px; }
+.btn.mic.listening {
+  background: linear-gradient(135deg, #a04b3a, #7c3527); color: #fff;
+  border-color: #c05a45; animation: mic-pulse 1.2s ease-in-out infinite;
+}
+@keyframes mic-pulse { 50% { box-shadow: 0 0 18px rgba(224, 133, 99, .6); } }
+.speak-btn:hover { color: var(--accent); }
+.qr-box { margin-top: 10px; }
+.modal-body select {
+  display: block; width: 100%; margin-top: 4px; padding: 8px 10px;
+  border: 1px solid var(--line); border-radius: 9px; background: var(--card);
+  color: var(--text); font-size: 13px; outline: none; font-family: inherit;
+}
+
 /* ---------- 动效偏好 ---------- */
 body:not(.anims-on) * { animation: none !important; transition: none !important; }
 @media (prefers-reduced-motion: reduce) { body * { animation: none !important; } }

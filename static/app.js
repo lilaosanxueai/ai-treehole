@@ -25,10 +25,21 @@ function el(tag, cls, text) {
 }
 function scrollBottom() { chatEl.scrollTop = chatEl.scrollHeight; }
 
+/* 局域网访问令牌：?t= 一次性收取，之后放 localStorage，所有请求带头 */
+(() => {
+  const t = new URLSearchParams(location.search).get("t");
+  if (t) {
+    localStorage.setItem("treehole_token", t);
+    history.replaceState(null, "", location.pathname);
+  }
+})();
+const TOKEN = localStorage.getItem("treehole_token") || "";
+const AUTH_HEADERS = TOKEN ? { "X-Treehole-Token": TOKEN } : {};
+
 async function postJSON(url, body) {
   const r = await fetch(url, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...AUTH_HEADERS },
     body: JSON.stringify(body || {}),
   });
   const data = await r.json();
@@ -36,9 +47,55 @@ async function postJSON(url, body) {
   return data;
 }
 
+/* ---------- 语音：朗读（TTS）与说话（STT） ---------- */
+function speakText(text) {
+  if (!("speechSynthesis" in window) || !text) return;
+  speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text.replace(/[#*`>]/g, ""));
+  u.lang = "zh-CN";
+  u.rate = 1;
+  const zh = speechSynthesis.getVoices().find(v => /zh[-_]CN/i.test(v.lang));
+  if (zh) u.voice = zh;
+  speechSynthesis.speak(u);
+}
+
+let recog = null, listening = false, micBase = "";
+function toggleMic() {
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  if (!SR) { alert("这个浏览器不支持语音识别，试试 Edge / Chrome"); return; }
+  if (listening) { recog && recog.stop(); return; }
+  recog = new SR();
+  recog.lang = "zh-CN";
+  recog.interimResults = true;
+  recog.continuous = true;
+  micBase = inputEl.value ? inputEl.value.replace(/\s+$/, "") + "\n" : "";
+  listening = true;
+  $("btn-mic").classList.add("listening");
+  $("btn-mic").title = "正在听…再点一下结束";
+  recog.onresult = (e) => {
+    let txt = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) txt += e.results[i][0].transcript;
+    inputEl.value = micBase + txt;
+    autosize();
+  };
+  recog.onend = () => {
+    listening = false;
+    $("btn-mic").classList.remove("listening");
+    $("btn-mic").title = "点一下开始说话，再点结束";
+  };
+  recog.onerror = (e) => {
+    listening = false;
+    $("btn-mic").classList.remove("listening");
+    if (e.error === "not-allowed") alert("麦克风权限被拒绝了，在浏览器地址栏锁图标里允许一下");
+  };
+  try { recog.start(); } catch {}
+}
+
 /* ---------- 状态加载 ---------- */
 async function loadState() {
-  const s = await fetch("/api/state").then((r) => r.json());
+  const r = await fetch("/api/state", { headers: AUTH_HEADERS });
+  if (r.status === 401) throw new Error("访问令牌缺失（请用带令牌的链接打开）");
+  const s = await r.json();
   state.persona = s.persona;
   state.sessions = s.sessions || [];
   state.roles = s.roles || {};
@@ -69,7 +126,7 @@ function setPill(node, ok, okText, badText) {
 /* ---------- 会话 ---------- */
 async function ensureSession() {
   if (state.sessionId) {
-    const r = await fetch("/api/state").then((x) => x.json()); // 顺带刷新
+    const r = await fetch("/api/state", { headers: AUTH_HEADERS }).then((x) => x.json()); // 顺带刷新
     const exists = r.sessions.some((s) => s.id === state.sessionId);
     if (exists) return loadSession(state.sessionId);
   }
@@ -166,6 +223,12 @@ function renderTreeMsg(text) {
   const m = el("div", "msg tree");
   const w = el("div", "bubble-wrap");
   w.appendChild(el("div", "bubble", text));
+  const ops = el("div", "meta-line");
+  const sp = el("span", "tag speak-btn", "🔊 读给我听");
+  sp.style.cursor = "pointer";
+  sp.onclick = () => speakText(text);
+  ops.appendChild(sp);
+  w.appendChild(ops);
   m.appendChild(el("div", "avatar", "🌳"));
   m.appendChild(w);
   chatEl.appendChild(m);
@@ -256,6 +319,7 @@ async function sendMessage() {
   if (!state.sessionId) await newSession();
   const userMsgEl = renderUserMsg(text, null);
   const userWrapEl = userMsgEl.querySelector(".bubble-wrap");
+  if (listening) { try { recog.stop(); } catch {} }  // 发送时自动结束听写
 
   // 树洞正在听
   const treeMsg = el("div", "msg tree");
@@ -274,7 +338,7 @@ async function sendMessage() {
   try {
     const resp = await fetch("/api/chat", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...AUTH_HEADERS },
       body: JSON.stringify({ session_id: state.sessionId, text, role_mode: state.roleMode }),
     });
     if (!resp.ok || !resp.body) throw new Error("HTTP " + resp.status);
@@ -311,6 +375,7 @@ async function sendMessage() {
             $("doc-link").href = evt.data.doc_url;
           }
           if (evt.data.risk === "high" || (scan && scan.risk === "high")) renderRiskCard();
+          if (localStorage.getItem("treehole_autotts") === "1") speakText(bubble.textContent);
         } else if (evt.event === "error") {
           bubble.innerHTML = "";
           bubble.appendChild(document.createTextNode("（" + evt.data.msg + "）"));
@@ -476,7 +541,7 @@ function renderHistory() {
 let cfgMasked = { api_key: "", backup_api_key: "", app_secret: "" };
 
 function openSettings() {
-  fetch("/api/config").then((r) => r.json()).then((c) => {
+  fetch("/api/config", { headers: AUTH_HEADERS }).then((r) => r.json()).then((c) => {
     cfgMasked = {
       api_key: c.llm.api_key,
       backup_api_key: c.llm.backup_api_key,
@@ -491,12 +556,17 @@ function openSettings() {
     $("set-bbase").value = c.llm.backup_base_url || "";
     $("set-bkey").value = c.llm.backup_api_key || "";
     $("set-bkey").placeholder = c.llm.has_backup_key ? "已保存（脱敏显示，改动才覆盖）" : "sk-…";
+    $("set-think").value = c.llm.thinking_mode || "smart";
     $("set-fid").value = c.feishu.app_id || "";
     $("set-fsecret").value = c.feishu.app_secret || "";
     $("set-fsecret").placeholder = c.feishu.has_secret ? "已保存（脱敏显示，改动才覆盖）" : "";
     $("set-ftoken").value = c.feishu.folder_token || "";
     $("set-fshare").checked = !!c.feishu.auto_share_tenant;
+    $("set-chatid").value = c.feishu.notify_chat_id || "";
+    $("set-lan").checked = !!c.server.lan;
+    $("set-token").value = c.server.access_token || "";
     $("set-name").value = c.friend_name || "树洞";
+    $("set-autotts").checked = localStorage.getItem("treehole_autotts") === "1";
   });
   $("modal-settings").hidden = false;
 }
@@ -508,6 +578,7 @@ async function saveSettings() {
       base_url: $("set-base").value.trim(),
       model: $("set-model").value.trim(),
       fast_model: $("set-fast").value.trim(),
+      thinking_mode: $("set-think").value,
       backup_model: $("set-bmodel").value.trim(),
       backup_base_url: $("set-bbase").value.trim(),
       backup_api_key: $("set-bkey").value.trim(),
@@ -517,11 +588,17 @@ async function saveSettings() {
       app_secret: $("set-fsecret").value.trim(),
       folder_token: $("set-ftoken").value.trim(),
       auto_share_tenant: $("set-fshare").checked,
+      notify_chat_id: $("set-chatid").value.trim(),
+    },
+    server: {
+      lan: $("set-lan").checked,
+      access_token: $("set-token").value.trim(),
     },
     friend_name: $("set-name").value.trim(),
   };
+  localStorage.setItem("treehole_autotts", $("set-autotts").checked ? "1" : "0");
   // 空值 / 未改动的脱敏值 → 不覆盖已保存的真实密钥
-  for (const sec of ["llm", "feishu"]) {
+  for (const sec of ["llm", "feishu", "server"]) {
     for (const k of Object.keys(body[sec])) {
       const v = body[sec][k];
       if (v === "" || (k === "api_key" && v === cfgMasked.api_key) ||
@@ -531,6 +608,7 @@ async function saveSettings() {
       }
     }
   }
+  if (!body.llm.thinking_mode) delete body.llm.thinking_mode;
   const r = await postJSON("/api/config", body);
   alert(r.msg || "已保存");
   $("modal-settings").hidden = true;
@@ -585,6 +663,25 @@ $("btn-save-settings").onclick = saveSettings;
 $("btn-test-llm").onclick = () => testEndpoint("/api/llm/check", $("test-llm-result"));
 $("btn-test-feishu").onclick = () => testEndpoint("/api/feishu/check", $("test-feishu-result"));
 $("btn-refresh-persona").onclick = refreshPersona;
+$("btn-mic").onclick = toggleMic;
+$("btn-qr").onclick = async () => {
+  const box = $("qr-box");
+  if (!box.hidden) { box.hidden = true; return; }
+  box.hidden = false;
+  box.textContent = "生成中…";
+  try {
+    const r = await fetch("/api/qr", { headers: AUTH_HEADERS }).then((x) => x.json());
+    box.innerHTML = "";
+    const img = el("img");
+    img.src = r.svg; img.alt = "手机连接二维码"; img.style.cssText = "width:180px;height:180px;display:block;margin:8px auto;background:#fff;border-radius:10px;padding:6px";
+    box.appendChild(img);
+    const tip = el("div", "tip", `手机扫码或访问：${r.url}`);
+    tip.style.cssText = "font-size:12px;color:var(--dim);text-align:center;word-break:break-all";
+    box.appendChild(tip);
+  } catch (e) {
+    box.textContent = "二维码获取失败：" + e.message;
+  }
+};
 
 /* ---------- 启动 ---------- */
 (async function init() {

@@ -113,7 +113,16 @@ class LLM:
         self.backup_api_key = (cfg.get("backup_api_key") or "").strip()
         self.backup_base_url = (cfg.get("backup_base_url") or "https://open.bigmodel.cn/api/paas/v4").rstrip("/")
         self.backup_model = (cfg.get("backup_model") or "").strip()
+        # 思考模式：smart=轻任务关思考(快)重任务开 | always | never
+        self.thinking_mode = cfg.get("thinking_mode") or "smart"
         self.http = httpx.AsyncClient(timeout=120)
+
+    def _want_thinking(self, default: bool) -> bool:
+        if self.thinking_mode == "always":
+            return True
+        if self.thinking_mode == "never":
+            return False
+        return default
 
     @property
     def ready(self) -> bool:
@@ -124,7 +133,7 @@ class LLM:
         return bool(self.backup_api_key and self.backup_model)
 
     async def _post(self, base_url, api_key, messages, model, stream=False,
-                    temperature=0.8, max_tokens=1024):
+                    temperature=0.8, max_tokens=1024, thinking=True):
         body = {
             "model": model,
             "messages": messages,
@@ -132,6 +141,8 @@ class LLM:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        if not thinking:
+            body["thinking"] = {"type": "disabled"}  # DeepSeek/GLM 通用：关闭思考链，首字更快
         headers = {"Content-Type": "application/json"}
         if api_key:
             headers["Authorization"] = f"Bearer {api_key}"
@@ -140,29 +151,36 @@ class LLM:
             raise RuntimeError(f"[{model}] HTTP {r.status_code}: {r.text[:200]}")
         return r
 
-    async def chat_once(self, messages, model=None, temperature=0.8, max_tokens=1024) -> str:
+    async def chat_once(self, messages, model=None, temperature=0.8, max_tokens=1024,
+                        thinking=None) -> str:
         if MOCK:
             return "（mock 回复）树洞收到，我在呢。"
+        think = self._want_thinking(True) if thinking is None else thinking
         try:
             r = await self._post(self.base_url, self.api_key, messages,
-                                 model or self.model, temperature=temperature, max_tokens=max_tokens)
+                                 model or self.model, temperature=temperature,
+                                 max_tokens=max_tokens, thinking=think)
         except Exception as e:
             if not self.backup_ready:
                 raise
             log.warning("主模型(%s)调用失败，切换备用(%s): %s", self.model, self.backup_model, e)
             r = await self._post(self.backup_base_url, self.backup_api_key, messages,
-                                 self.backup_model, temperature=temperature, max_tokens=max_tokens)
+                                 self.backup_model, temperature=temperature,
+                                 max_tokens=max_tokens, thinking=think)
         data = r.json()
         try:
             return data["choices"][0]["message"]["content"] or ""
         except Exception:
             raise RuntimeError(f"LLM 返回异常: {json.dumps(data, ensure_ascii=False)[:300]}")
 
-    async def _stream_once(self, base_url, api_key, model, messages, temperature, max_tokens):
+    async def _stream_once(self, base_url, api_key, model, messages, temperature, max_tokens, thinking=True):
+        body = {"model": model, "messages": messages, "stream": True,
+                "temperature": temperature, "max_tokens": max_tokens}
+        if not thinking:
+            body["thinking"] = {"type": "disabled"}
         async with self.http.stream(
             "POST", f"{base_url}/chat/completions",
-            json={"model": model, "messages": messages, "stream": True,
-                  "temperature": temperature, "max_tokens": max_tokens},
+            json=body,
             headers={"Content-Type": "application/json", "Authorization": f"Bearer {api_key}"},
         ) as r:
             if r.status_code != 200:
@@ -182,16 +200,18 @@ class LLM:
                     yield delta
 
     async def chat_stream(self, messages, model=None, temperature=0.85, max_tokens=4000):
-        """流式对话，逐段 yield 文本增量；主模型在产出任何内容前失败则切备用"""
+        """流式对话，逐段 yield 文本增量；主模型在产出任何内容前失败则切备用
+        闲聊默认关闭思考链（thinking_mode=smart），换来明显更快的首字"""
         if MOCK:
             for piece in ["我在呢。这一刻先不用急着想清楚什么，", "把刚才那口气慢慢吐出来——你说，我听着。"]:
                 await asyncio.sleep(0.3)
                 yield piece
             return
+        think = self._want_thinking(False)
         got_any = False
         try:
             async for delta in self._stream_once(self.base_url, self.api_key,
-                                                 model or self.model, messages, temperature, max_tokens):
+                                                 model or self.model, messages, temperature, max_tokens, think):
                 got_any = True
                 yield delta
         except Exception as e:
@@ -199,7 +219,7 @@ class LLM:
                 raise  # 已经输出过内容，或没有备用，只能报错
             log.warning("主模型(%s)流式失败，切换备用(%s): %s", self.model, self.backup_model, e)
             async for delta in self._stream_once(self.backup_base_url, self.backup_api_key,
-                                                 self.backup_model, messages, temperature, max_tokens):
+                                                 self.backup_model, messages, temperature, max_tokens, think):
                 yield delta
 
     async def ping(self) -> dict:
@@ -210,7 +230,7 @@ class LLM:
         try:
             out = await self.chat_once(
                 [{"role": "user", "content": "回复两个字：收到"}],
-                model=self.fast_model, max_tokens=256,
+                model=self.fast_model, max_tokens=256, thinking=False,
             )
             parts.append(f"主模型 {self.model} ✓（{out.strip()[:12]}）")
         except Exception as e:
@@ -298,7 +318,7 @@ async def quick_scan(llm: LLM, text: str, recent_tail: str = "") -> dict:
                     {"role": "system", "content": SCAN_PROMPT},
                     {"role": "user", "content": user},
                 ],
-                model=llm.fast_model, temperature=0.2, max_tokens=600,
+                model=llm.fast_model, temperature=0.2, max_tokens=600, thinking=False,
             ),
             timeout=20,
         )
@@ -440,7 +460,7 @@ async def summarize_session(llm: LLM, sess: dict) -> str:
                 {"role": "system", "content": SUMMARY_PROMPT},
                 {"role": "user", "content": convo[:8000]},
             ],
-            model=llm.fast_model, temperature=0.4, max_tokens=1500,
+            model=llm.fast_model, temperature=0.4, max_tokens=1500, thinking=False,
         )
         return out.strip()[:1200]
     except Exception as e:

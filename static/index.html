@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>🌳 树洞挚友 · 把心事讲给树洞听</title>
-<link rel="stylesheet" href="/static/style.css?v=5">
+<link rel="stylesheet" href="/static/style.css?v=6">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌳</text></svg>">
 </head>
 <body>
@@ -49,7 +49,8 @@
   <footer class="composer">
     <div class="roles" id="roles"></div>
     <div class="inputrow">
-      <textarea id="input" rows="1" placeholder="心里的话，讲给树洞听…（Enter 发送 · Shift+Enter 换行）"></textarea>
+      <button id="btn-mic" class="btn mic" title="按住想说的话说给树洞听（点一下开始/结束）">🎤</button>
+      <textarea id="input" rows="1" placeholder="心里的话，讲给树洞听…（Enter 发送 · Shift+Enter 换行 · 🎤 说话）"></textarea>
       <button id="send" class="btn primary big">送进树洞 🌳</button>
     </div>
     <div class="privacy-hint">🔒 树洞只在本机运行 · 记录同步到你自己的飞书云文档</div>
@@ -103,6 +104,11 @@
         <label>Base URL<input id="set-base" placeholder="https://api.deepseek.com"></label>
         <label>主模型<input id="set-model" placeholder="deepseek-flash"></label>
         <label>轻量模型（情绪快扫/小结）<input id="set-fast" placeholder="deepseek-flash"></label>
+        <label>思考模式<select id="set-think">
+          <option value="smart">智能：闲聊秒回、深度分析开思考（推荐）</option>
+          <option value="always">总是思考（更慢更深思）</option>
+          <option value="never">从不思考（最快）</option>
+        </select></label>
         <label>备用模型（主模型失败时自动切换，可留空）<input id="set-bmodel" placeholder="glm-5.3-flash"></label>
         <label>备用 Base URL<input id="set-bbase" placeholder="https://open.bigmodel.cn/api/paas/v4"></label>
         <label>备用 API Key<input id="set-bkey" type="password" placeholder="sk-…（已保存则此处留空即可）"></label>
@@ -123,6 +129,21 @@
       <section>
         <h3>🌳 挚友昵称</h3>
         <label>TA 怎么称呼你<input id="set-name" placeholder="树洞"></label>
+        <label class="check"><input id="set-autotts" type="checkbox"> 自动朗读树洞的回复（本地语音合成）</label>
+      </section>
+      <section>
+        <h3>📱 手机访问（局域网）</h3>
+        <label class="check"><input id="set-lan" type="checkbox"> 允许手机等局域网设备访问（保存后重启服务生效；首次会弹防火墙授权，请允许）</label>
+        <label>访问令牌（自动生成，也可自定义）<input id="set-token" placeholder="自动生成"></label>
+        <div class="media-btns">
+          <button class="btn ghost small" id="btn-qr">显示连接二维码</button>
+        </div>
+        <div id="qr-box" class="qr-box" hidden></div>
+      </section>
+      <section>
+        <h3>💌 主动关怀（可选）</h3>
+        <label>飞书会话 ID（留空则不推送；建一个只有你和机器人的会话，把 chat_id 粘进来）<input id="set-chatid" placeholder="oc_…"></label>
+        <p class="tip">超过 3 天没来、或连续低落时，树洞会轻声问候一句；每周日晚自动生成《树洞周报》并推送链接。</p>
       </section>
       <div class="modal-foot">
         <button class="btn primary" id="btn-save-settings">保存</button>
@@ -131,7 +152,7 @@
   </div>
 </div>
 
-<script src="/static/skins.js?v=5"></script>
-<script src="/static/app.js?v=5"></script>
+<script src="/static/skins.js?v=6"></script>
+<script src="/static/app.js?v=6"></script>
 </body>
 </html>
