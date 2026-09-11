@@ -125,17 +125,25 @@ DEFAULT_PERSONA = {
     "version": 0,
     "updated_at": "",
     "summary": "刚认识的 TA —— 树洞还在慢慢了解中。",
-    "traits": [],            # [{label, score, evidence}]
-    "big5": {},              # {开放性, 尽责性, 外向性, 宜人性, 神经质}
+    "summary_plain": "",
+    "summary_pro": "",
+    "traits": [],            # [{label, score, evidence, state_or_trait}]
+    "big5": {},              # v2: {神经质: {score, confidence, plain, facets:{}}, ...}
+    "signals": {},           # {low_mood/anxiety/stress: {score, trend, evidence}} 筛查信号，非诊断
+    "patterns": [],          # [{name, plain, evidence}]
+    "triggers": [],
+    "protective": [],
+    "evidence_ledger": [],   # [{date, content, quote, domain, state_or_trait, confidence}] 上限200
     "emotional_baseline": "",
-    "care_about": [],        # 在意的人和事
-    "stressors": [],         # 压力源
-    "energy_sources": [],    # 能量来源
-    "communication_prefs": [],  # 偏好的沟通方式
-    "memorable_quotes": [],  # 印象深刻的话
-    "ai_notes": "",          # 给树洞自己的备忘：怎么陪 TA 聊
-    "mood_log": [],          # [{ts, emotion, intensity, valence}]
-    "history": [],           # 每次深度分析的历史快照 [{date, version, summary}]
+    "care_about": [],
+    "stressors": [],
+    "energy_sources": [],
+    "communication_prefs": [],
+    "memorable_quotes": [],
+    "ai_notes": "",
+    "mood_log": [],          # [{ts, emotion, category, intensity, valence, arousal, coping}]
+    "risk": {"streak_low_days": 0},
+    "history": [],
 }
 
 
@@ -164,11 +172,44 @@ def log_mood(scan: dict):
         {
             "ts": now_iso(),
             "emotion": scan.get("emotion", "平静"),
+            "category": scan.get("category", "basic"),
             "intensity": int(scan.get("intensity", 30)),
             "valence": int(scan.get("valence", 0)),
+            "arousal": int(scan.get("arousal", 0)),
+            "coping": scan.get("coping", "none"),
         }
         )
     p["mood_log"] = p["mood_log"][-500:]
+    # 连续低落天数（按自然日聚合，均值 valence <= -1 记为低落日）
+    days = {}
+    for m in p["mood_log"]:
+        d = m["ts"][:10]
+        days.setdefault(d, []).append(m.get("valence", 0))
+    streak = 0
+    from datetime import date, timedelta
+    d = date.today()
+    while True:
+        vals = days.get(d.isoformat())
+        if vals and sum(vals) / len(vals) <= -1:
+            streak += 1
+            d -= timedelta(days=1)
+        else:
+            break
+    p.setdefault("risk", {})["streak_low_days"] = streak
+    save_persona(p)
+
+
+def append_observations(obs: list):
+    """会话分析师产出的观察 → 证据台账（按 quote 去重，保留最近 200 条）"""
+    p = load_persona()
+    seen = {o.get("quote") for o in p.get("evidence_ledger", [])}
+    for o in obs or []:
+        if isinstance(o, dict) and o.get("quote") not in seen:
+            p.setdefault("evidence_ledger", []).append(
+                {"date": now_iso(), **{k: o.get(k, "") for k in
+                 ["content", "quote", "domain", "state_or_trait", "confidence"]}})
+            seen.add(o.get("quote"))
+    p["evidence_ledger"] = p["evidence_ledger"][-200:]
     save_persona(p)
 
 

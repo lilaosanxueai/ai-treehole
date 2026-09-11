@@ -406,7 +406,91 @@ function parseSSE(chunk) {
   try { return { event, data: JSON.parse(data) }; } catch { return null; }
 }
 
-/* ---------- 画像抽屉 ---------- */
+/* ---------- 画像抽屉 v2：专业底座 + 大白话 ---------- */
+const BIG5_TIPS = {
+  "神经质": "情绪的波浪幅度：分高=感受深、易被扰动；分低=稳",
+  "外向性": "电量来自哪里：分高=人多的地方回血；分低=独处回血",
+  "开放性": "对新东西的胃口：分高=好奇、爱尝鲜；分低=恋旧、讲实用",
+  "宜人性": "待人默认温度：分高=先照顾别人；分低=先讲道理和边界",
+  "尽责性": "对自己的承诺：分高=计划与完成；分低=随性、弹性大",
+};
+const SIGNAL_LABEL = { low_mood: "低落信号", anxiety: "焦虑信号", stress: "压力信号" };
+const TREND_CN = { up: "↑ 在变重", flat: "→ 平稳", down: "↓ 在缓解" };
+
+function big5Score(v) { return typeof v === "number" ? v : (v && typeof v.score === "number" ? v.score : null); }
+
+function drawRadar(canvas, scores) {
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width = 260, H = canvas.height = 220;
+  const cx = W / 2, cy = H / 2 + 6, R = 78;
+  const dims = Object.keys(scores);
+  if (!dims.length) return;
+  const ang = i => -Math.PI / 2 + i * 2 * Math.PI / dims.length;
+  ctx.clearRect(0, 0, W, H);
+  const cs = getComputedStyle(document.documentElement);
+  const accent = cs.getPropertyValue("--accent").trim() || "#8fd6a0";
+  const line = cs.getPropertyValue("--line").trim() || "#333";
+  const text = cs.getPropertyValue("--muted").trim() || "#999";
+  for (let ring = 1; ring <= 4; ring++) {
+    ctx.beginPath();
+    for (let i = 0; i <= dims.length; i++) {
+      const a = ang(i % dims.length), r = R * ring / 4;
+      const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+      i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+    }
+    ctx.strokeStyle = line; ctx.globalAlpha = .45; ctx.stroke(); ctx.globalAlpha = 1;
+  }
+  ctx.beginPath();
+  dims.forEach((d, i) => {
+    const a = ang(i), r = R * Math.max(4, (scores[d] || 50)) / 100;
+    const x = cx + Math.cos(a) * r, y = cy + Math.sin(a) * r;
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  });
+  ctx.closePath();
+  ctx.fillStyle = accent; ctx.globalAlpha = .22; ctx.fill();
+  ctx.globalAlpha = .9; ctx.strokeStyle = accent; ctx.lineWidth = 1.6; ctx.stroke(); ctx.globalAlpha = 1;
+  ctx.font = "11px sans-serif"; ctx.fillStyle = text; ctx.textAlign = "center";
+  dims.forEach((d, i) => {
+    const a = ang(i);
+    ctx.fillText(d, cx + Math.cos(a) * (R + 20), cy + Math.sin(a) * (R + 16) + 4);
+    ctx.fillText(String(scores[d] ?? "?"), cx + Math.cos(a) * (R + 20), cy + Math.sin(a) * (R + 16) + 16);
+  });
+}
+
+function drawMoodLine(canvas, logs) {
+  const ctx = canvas.getContext("2d");
+  const W = canvas.width = 380, H = canvas.height = 110;
+  ctx.clearRect(0, 0, W, H);
+  const cs = getComputedStyle(document.documentElement);
+  const accent = cs.getPropertyValue("--accent").trim() || "#8fd6a0";
+  const danger = cs.getPropertyValue("--danger").trim() || "#e08563";
+  const line = cs.getPropertyValue("--line").trim() || "#333";
+  const dim = cs.getPropertyValue("--dim").trim() || "#666";
+  const data = logs.slice(-60);
+  const zero = H / 2;
+  ctx.strokeStyle = line; ctx.globalAlpha = .5;
+  ctx.beginPath(); ctx.moveTo(0, zero); ctx.lineTo(W, zero); ctx.stroke(); ctx.globalAlpha = 1;
+  if (!data.length) {
+    ctx.fillStyle = dim; ctx.font = "12px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText("聊过之后，这里会出现你的情绪轨迹", W / 2, H / 2 - 10);
+    return;
+  }
+  const step = data.length > 1 ? W / (data.length - 1) : W;
+  data.forEach((m, i) => {
+    const x = i * step, y = zero - (m.valence || 0) / 2 * (H / 2 - 10);
+    ctx.beginPath(); ctx.arc(x, y, 1.8, 0, 7);
+    ctx.fillStyle = (m.valence || 0) < 0 ? danger : accent; ctx.fill();
+    if (i) {
+      const px = (i - 1) * step, py = zero - (data[i - 1].valence || 0) / 2 * (H / 2 - 10);
+      ctx.beginPath(); ctx.moveTo(px, py); ctx.lineTo(x, y);
+      ctx.strokeStyle = (m.valence || 0) < 0 ? danger : accent;
+      ctx.globalAlpha = .35; ctx.stroke(); ctx.globalAlpha = 1;
+    }
+  });
+  ctx.fillStyle = dim; ctx.font = "10px sans-serif"; ctx.textAlign = "left";
+  ctx.fillText("最近 " + data.length + " 条消息的情绪（上=明亮 下=低落）", 6, H - 6);
+}
+
 function renderDrawer() {
   const body = $("drawer-body");
   body.innerHTML = "";
@@ -416,50 +500,134 @@ function renderDrawer() {
       "树洞还没画出你的画像。\n聊几轮之后，点上方「🔄 深度更新」试试。"));
     return;
   }
-  body.appendChild(el("div", "persona-summary", "「 " + (p.summary || "") + " 」"));
-  body.appendChild(el("div", "persona-meta",
-    `v${p.version} · 更新于 ${p.updated_at || "—"} · 由对话记录自动分析`));
 
-  if (p.big5 && Object.keys(p.big5).length) {
+  /* 总览：白话画像 + 连续低落提示 */
+  body.appendChild(el("div", "persona-summary", "「 " + (p.summary_plain || p.summary || "") + " 」"));
+  const streak = (p.risk || {}).streak_low_days || 0;
+  if (streak >= 3) {
+    const warn = el("div", "ai-notes");
+    warn.style.borderColor = "rgba(224,133,99,.5)";
+    warn.textContent = `💗 连续 ${streak} 天情绪都偏低。不用急着好起来，但如果持续两周以上、影响到吃饭睡觉，建议找专业心理咨询聊聊（心理援助热线 12356）。`;
+    body.appendChild(warn);
+  }
+  const meta = el("div", "persona-meta",
+    `v${p.version} · 更新于 ${p.updated_at || "—"} · 每条结论都有对话依据，可展开查看`);
+  body.appendChild(meta);
+
+  /* 大五：雷达图 + 白话条 + 层面 */
+  const b5 = p.big5 || {};
+  const scores = {};
+  for (const [d, v] of Object.entries(b5)) scores[d] = big5Score(v);
+  if (Object.keys(scores).filter(k => scores[k] != null).length >= 3) {
     const sec = el("div", "p-section");
-    sec.appendChild(el("h4", "", "🧭 大五人格估分"));
-    for (const [k, v] of Object.entries(p.big5)) {
-      const row = el("div", "bar-row");
-      row.appendChild(el("span", "name", k));
-      const track = el("div", "bar-track");
-      const fill = el("div", "bar-fill");
-      fill.style.width = Math.max(2, Math.min(100, Number(v) || 0)) + "%";
-      track.appendChild(fill);
-      row.appendChild(track);
-      row.appendChild(el("span", "num", String(v)));
-      sec.appendChild(row);
+    const h4 = el("h4", "", "🧭 大五人格（点维度看白话解释）");
+    sec.appendChild(h4);
+    const wrap = el("div", "", "");
+    wrap.style.cssText = "display:flex;justify-content:center";
+    const radar = document.createElement("canvas");
+    wrap.appendChild(radar); sec.appendChild(wrap);
+    drawRadar(radar, scores);
+    for (const [d, v] of Object.entries(b5)) {
+      const sc = big5Score(v);
+      if (sc == null) continue;
+      const box = el("div", "b5-row");
+      const head = el("div", "b5-head");
+      const name = el("b", "", d);
+      const num = el("span", "", String(sc) + (v.confidence === "低" ? "（证据还少）" : ""));
+      head.append(name, num);
+      const tip = el("div", "b5-tip", (v.plain || "") + (v.plain ? "" : BIG5_TIPS[d] || ""));
+      box.append(head, tip);
+      const facets = v.facets || {};
+      if (Object.keys(facets).length) {
+        const det = document.createElement("details");
+        det.className = "b5-facets";
+        const sum = el("summary", "", "细分层面");
+        det.appendChild(sum);
+        for (const [fn, fv] of Object.entries(facets)) {
+          det.appendChild(el("div", "b5-tip",
+            `${fn} ${fv.score} —— 依据：${fv.evidence || "—"}`));
+        }
+        box.appendChild(det);
+      }
+      sec.appendChild(box);
     }
     body.appendChild(sec);
   }
+
+  /* 情绪信号（筛查参考） */
+  const sig = p.signals || {};
+  if (Object.keys(sig).length) {
+    const sec = el("div", "p-section");
+    sec.appendChild(el("h4", "", "🌡️ 近期情绪信号（是信号，不是诊断）"));
+    for (const [k, v] of Object.entries(sig)) {
+      if (!v || typeof v.score !== "number") continue;
+      const row = el("div", "bar-row");
+      row.appendChild(el("span", "name", SIGNAL_LABEL[k] || k));
+      const track = el("div", "bar-track");
+      const fill = el("div", "bar-fill");
+      fill.style.width = Math.max(2, Math.min(100, v.score)) + "%";
+      if (v.score >= 60) fill.style.background = "linear-gradient(90deg,#a05a3c,var(--danger))";
+      track.appendChild(fill);
+      row.appendChild(track);
+      row.appendChild(el("span", "num", String(v.score)));
+      sec.appendChild(row);
+      if (v.trend || v.evidence) {
+        sec.appendChild(el("div", "b5-tip",
+          `${TREND_CN[v.trend] || ""}${v.evidence ? " · 依据：" + v.evidence : ""}`));
+      }
+    }
+    const note = el("div", "disclaim", "这些只是从聊天里观察到的倾向，不能替代心理评估或诊断；分数高≠生病，只是最近辛苦的痕迹。");
+    sec.appendChild(note);
+    body.appendChild(sec);
+  }
+
+  /* 反复出现的模式 */
+  if ((p.patterns || []).length) {
+    const sec = el("div", "p-section");
+    sec.appendChild(el("h4", "", "🔁 反复出现的模式"));
+    for (const pat of p.patterns) {
+      const d = el("div", "trait");
+      d.appendChild(el("div", "t-head bold", pat.name));
+      if (pat.plain) d.appendChild(el("div", "t-ev", pat.plain));
+      if (pat.evidence) d.appendChild(el("div", "t-ev", "依据：" + pat.evidence));
+      sec.appendChild(d);
+    }
+    body.appendChild(sec);
+  }
+
+  /* 情绪时间线 */
+  {
+    const sec = el("div", "p-section");
+    sec.appendChild(el("h4", "", "📈 情绪轨迹"));
+    const c = document.createElement("canvas");
+    c.style.cssText = "width:100%;max-width:420px";
+    sec.appendChild(c);
+    drawMoodLine(c, p.mood_log || []);
+    body.appendChild(sec);
+  }
+
+  /* 核心特质（区分状态/特质） */
   if ((p.traits || []).length) {
     const sec = el("div", "p-section");
-    sec.appendChild(el("h4", "", "🌱 核心特质"));
+    sec.appendChild(el("h4", "", "🌱 核心特质（区分「稳定特质」与「近期状态」）"));
     for (const t of p.traits) {
       const d = el("div", "trait");
       const head = el("div", "t-head");
       head.appendChild(el("b", "", t.label));
-      head.appendChild(el("span", "", (t.score != null ? t.score : "") + (t.evidence ? "" : "")));
+      const tag = t.state_or_trait === "trait" ? "稳定特质" : "近期状态";
+      head.appendChild(el("span", "tag" + (t.state_or_trait === "trait" ? "" : ""), tag));
       d.appendChild(head);
       if (t.evidence) d.appendChild(el("div", "t-ev", "依据：" + t.evidence));
       sec.appendChild(d);
     }
     body.appendChild(sec);
   }
-  if (p.emotional_baseline) {
-    const sec = el("div", "p-section");
-    sec.appendChild(el("h4", "", "🌡️ 情绪基调"));
-    sec.appendChild(el("div", "", p.emotional_baseline)).style.cssText = "font-size:13.5px;line-height:1.8;color:var(--muted)";
-    body.appendChild(sec);
-  }
+
   const chipSections = [
     ["💗 在意的人和事", p.care_about, ""],
     ["🪨 压力源", p.stressors, "danger"],
     ["⚡ 能量来源", p.energy_sources, "pos"],
+    ["🛡️ 保护性资源", p.protective, "pos"],
     ["💬 偏好的沟通方式", p.communication_prefs, "warm"],
   ];
   for (const [title, arr, cls] of chipSections) {
@@ -471,19 +639,43 @@ function renderDrawer() {
     sec.appendChild(chips);
     body.appendChild(sec);
   }
+
   if ((p.memorable_quotes || []).length) {
     const sec = el("div", "p-section");
     sec.appendChild(el("h4", "", "🗝️ 你说过的、树洞记住了的话"));
     for (const q of p.memorable_quotes) sec.appendChild(el("div", "quote", "“" + q + "”"));
     body.appendChild(sec);
   }
+
   if (p.ai_notes) {
     const sec = el("div", "p-section");
     sec.appendChild(el("h4", "", "📝 树洞的陪伴备忘"));
-    const n = el("div", "ai-notes", p.ai_notes);
-    sec.appendChild(n);
+    sec.appendChild(el("div", "ai-notes", p.ai_notes));
     body.appendChild(sec);
   }
+
+  /* 证据台账：为什么这么说？ */
+  const ledger = p.evidence_ledger || [];
+  if (ledger.length) {
+    const sec = el("div", "p-section");
+    sec.appendChild(el("h4", "", `🔍 为什么这么说？（${ledger.length} 条观察依据）`));
+    const det = document.createElement("details");
+    det.appendChild(el("summary", "", "展开查看树洞的观察记录"));
+    for (const o of ledger.slice(-15).reverse()) {
+      const d = el("div", "ledger-item");
+      d.appendChild(el("div", "", `· ${o.content}`));
+      if (o.quote) d.appendChild(el("div", "t-ev", `原话：「${o.quote}」`));
+      d.appendChild(el("div", "t-ev",
+        `${(o.date || "").slice(5, 16)} · ${o.domain || "其他"} · ${o.state_or_trait === "trait" ? "特质线索" : "当时状态"} · 可信度${o.confidence || "低"}`));
+      det.appendChild(d);
+    }
+    sec.appendChild(det);
+    body.appendChild(sec);
+  }
+
+  const foot = el("div", "disclaim",
+    "ℹ️ 以上由 AI 基于你的对话做出，供自我了解与陪伴参考；它会有偏差，也绝不构成医学诊断。如果困扰持续或加重，请信任专业人士（心理援助热线 12356）。");
+  body.appendChild(foot);
 }
 
 async function refreshPersona() {

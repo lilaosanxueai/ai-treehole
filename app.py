@@ -345,14 +345,16 @@ async def _finalize(session_id: str, doc: dict):
         if not sess or not sess["messages"]:
             return
         if sess["turns"] % 8 == 0:
-            summary = await brain.summarize_session(llm, sess)
-            if summary:
-                sess["summary"] = summary
+            micro = await brain.summarize_session(llm, sess)
+            if micro.get("summary"):
+                sess["summary"] = micro["summary"]
                 store.save_session(sess)
+                if micro.get("observations"):
+                    store.append_observations(micro["observations"])
                 if doc.get("token"):
                     await writer.enqueue(
                         doc["token"],
-                        feishu.summary_blocks(store.now_iso()[11:16], summary),
+                        feishu.summary_blocks(store.now_iso()[11:16], micro["summary"]),
                         label="summary",
                     )
         # 自动深度画像：距上次分析累计轮数够多
@@ -503,11 +505,18 @@ async def refresh_persona_internal() -> dict:
     new_fields = await brain.deep_analyze(llm, persona, summaries, recent)
     if not new_fields:
         return {"ok": False, "msg": "分析失败（模型无有效输出）", "persona": persona}
-    persona.update({k: v for k, v in new_fields.items() if k in store.DEFAULT_PERSONA})
+    # 双 pass 内部已完成 big5 收缩融合；此处只做白名单合并
+    for k in new_fields:
+        if k in store.DEFAULT_PERSONA and not k.startswith("_"):
+            persona[k] = new_fields[k]
+    # 兼容旧字段：summary_plain 缺失时用 summary 兜底
+    if new_fields.get("summary") and not new_fields.get("summary_plain"):
+        persona["summary_plain"] = new_fields["summary"]
     persona["version"] = persona.get("version", 0) + 1
     persona["analyzed_turns"] = sum(s.get("turns", 0) for s in store.list_sessions(200))
     persona.setdefault("history", []).append(
-        {"date": store.now_iso(), "version": persona["version"], "summary": new_fields.get("summary", "")[:80]}
+        {"date": store.now_iso(), "version": persona["version"],
+         "summary": (new_fields.get("summary_plain") or new_fields.get("summary", ""))[:80]}
     )
     persona["history"] = persona["history"][-30:]
     store.save_persona(persona)
@@ -516,6 +525,8 @@ async def refresh_persona_internal() -> dict:
         pdoc = await asyncio.to_thread(fs.ensure_persona_doc)
         if pdoc.get("token"):
             lines = brain.persona_digest_lines(new_fields)
+            if new_fields.get("_critique"):
+                lines.append(new_fields["_critique"])
             await writer.enqueue(
                 pdoc["token"],
                 feishu.persona_snapshot_blocks(persona["version"], store.now_iso()[:16], lines),

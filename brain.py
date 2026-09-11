@@ -88,10 +88,16 @@ BASE_PROMPT = """你是「树洞」，TA 最信任的 AI 挚友。你们在一�
 - 不做医学诊断，不替代专业心理帮助；情况严重时温和地指向专业资源
 - TA 的秘密只留在树洞里，绝不评判 TA 告诉你的任何人"""
 
-RISK_HINT = {"none": 0, "low": 1, "high": 2}
+RISK_HINT = {"none": 0, "low": 1, "mid": 2, "high": 3}
 
 RISK_WORDS = ["不想活", "自杀", "自残", "自伤", "结束生命", "轻生", "了此一生", "活不下去",
               "活不成了", "伤害自己", "没有意义再活", "想消失", "解脱"]
+MID_RISK_WORDS = ["是负担", "拖累", "没救了", "撑不下去", "绝望", "崩溃了", "熬不过去"]
+STATE_WORDS = [("睡眠", ["睡不着", "失眠", "睡不好", "早醒", "多梦"]),
+               ("食欲", ["吃不下", "没胃口", "暴食"]),
+               ("精力", ["没力气", "疲", "累瘫", "起不来床"]),
+               ("专注", ["注意力", "集中不了", "记不住", "走神"])]
+CHINESE_SPECIFIC = ["委屈", "憋屈", "心累", "闹心", "窝火", "膈应", "别扭"]
 NEG_WORDS = ["焦虑", "烦", "累", "疲惫", "难过", "伤心", "难受", "崩溃", "压力", "孤独", "委屈",
              "生气", "愤怒", "失望", "害怕", "担心", "慌", "抑郁", "emo", "糟心", "郁闷", "无力"]
 POS_WORDS = ["开心", "高兴", "兴奋", "不错", "很好", "哈哈", "嘻嘻", "喜欢", "顺利",
@@ -290,20 +296,23 @@ def extract_json(text: str):
 
 
 # ---------------------------------------------------------------------------
-# 情绪快扫（每条用户消息之后、回复之前）
+# 情绪快扫 v2（情感环形模型 + 离散情绪分类 + 分级风险 + 身心状态捕捉）
 # ---------------------------------------------------------------------------
-SCAN_PROMPT = """你是情绪分析器。分析用户这条最新消息（可结合最近对话上文），只输出一个 JSON 对象，不要任何多余文字：
-{"emotion":"单个中文情绪词","intensity":0到100整数,"valence":-2到2整数(负=消极,正=积极),
- "topics":["提到的话题或人,最多3个,没有就空数组"],
- "role":"listener|talker|sharer|soother 之一",
- "risk":"none|low|high","one_line":"一句话概括用户此刻的状态,20字内"}
-
-角色选择规则：
-- 出现自伤/自杀/严重崩溃意图 → risk=high
-- 负面情绪强烈(intensity≥70且消极) → soother
-- 负面但中等强度、明显在倾诉 → listener
-- 明确想听观点/建议/解释/求分析 → sharer
-- 中性或积极、想闲聊 → talker"""
+SCAN_PROMPT = """你是树洞的情绪分析引擎，基于情感环形模型（效价valence×唤醒arousal）与离散情绪分类。分析用户最新消息（可结合最近对话），只输出一个 JSON 对象，不要任何多余文字：
+{"emotion":"单个中文情绪词","category":"basic|social|self_conscious|chinese_specific 之一",
+ "valence":-2到2整数(负=消极),"arousal":-2到2整数(平静↔激动),"intensity":0到100,
+ "topics":["话题或人,最多3个"],
+ "coping":"venting|problem_focusing|seeking_support|avoidance|rumination|positive_reframing|none 之一",
+ "role":"listener|talker|sharer|soother","risk":"none|low|mid|high",
+ "risk_signals":["risk≠none时才填：具体信号，如 绝望表述/自伤意念/睡眠变化/社交退缩/功能受损"],
+ "state_changes":["消息里提及的身心状态变化，如 睡眠变差/食欲下降/注意力差，没有就空数组"],
+ "one_line":"一句话概括用户此刻状态,20字内"}
+分类说明：basic=喜怒哀惧等基础情绪；social=人际相关(嫉妒/感激)；self_conscious=羞愧/内疚/自豪；chinese_specific=委屈/憋屈/心累/闹心等中文特有。
+风险分级（从严不从宽，但 high 绝不能漏）：
+- high：自伤自杀意念、极端绝望、"消失/解脱"类表述
+- mid：明显持续无望、崩溃感、觉得自己是负担，但无自伤意念
+- low：明显低落但可控，或刚经历重大打击
+角色规则：risk≥mid→soother；负面强(intensity≥70且消极)→soother；负面中低强度且在倾诉→listener；明确求观点/建议→sharer；中性积极闲聊→talker。"""
 
 
 async def quick_scan(llm: LLM, text: str, recent_tail: str = "") -> dict:
@@ -329,16 +338,25 @@ async def quick_scan(llm: LLM, text: str, recent_tail: str = "") -> dict:
         role = data.get("role")
         scan = {
             "emotion": str(data.get("emotion", fallback["emotion"]))[:6],
+            "category": data.get("category") if data.get("category") in
+                        {"basic", "social", "self_conscious", "chinese_specific"} else fallback["category"],
             "intensity": _clamp(data.get("intensity"), 0, 100, fallback["intensity"]),
             "valence": _clamp(data.get("valence"), -2, 2, fallback["valence"]),
+            "arousal": _clamp(data.get("arousal"), -2, 2, fallback.get("arousal", 0)),
             "topics": [str(t)[:12] for t in (data.get("topics") or [])][:3],
+            "coping": data.get("coping") if data.get("coping") in
+                      {"venting", "problem_focusing", "seeking_support", "avoidance",
+                       "rumination", "positive_reframing"} else "none",
             "role": role if role in VALID_ROLES else fallback["role"],
-            "risk": data.get("risk") if data.get("risk") in RISK_HINT else fallback["risk"],
+            "risk": data.get("risk") if data.get("risk") in {"none", "low", "mid", "high"} else fallback["risk"],
+            "risk_signals": [str(s)[:30] for s in (data.get("risk_signals") or [])][:4],
+            "state_changes": [str(s)[:20] for s in (data.get("state_changes") or [])][:4],
             "one_line": str(data.get("one_line", ""))[:40],
         }
         # 高风险词兜底：LLM 漏判也不放过
         if fallback["risk"] == "high":
             scan["risk"] = "high"
+            scan["risk_signals"] = (scan["risk_signals"] or ["规则引擎命中危机词"])[:4]
         return scan
     except Exception as e:
         log.warning("情绪快扫失败，使用规则兜底: %s", e)
@@ -347,15 +365,21 @@ async def quick_scan(llm: LLM, text: str, recent_tail: str = "") -> dict:
 
 def heuristic_scan(text: str) -> dict:
     t = text or ""
-    risk = "high" if any(w in t for w in RISK_WORDS) else "none"
+    risk = "high" if any(w in t for w in RISK_WORDS) else \
+           "mid" if any(w in t for w in MID_RISK_WORDS) else "none"
     neg = sum(t.count(w) for w in NEG_WORDS)
     pos = sum(t.count(w) for w in POS_WORDS)
-    intense = t.count("!") + t.count("！") + t.count("?") * 0.5 + t.count("？") * 0.5
+    marks = t.count("!") + t.count("！")
     emotion = "平静"
     if neg or pos:
         emotion = _first_match(t, NEG_WORDS if neg >= pos else POS_WORDS)
-    intensity = min(100, int(20 + max(neg, pos) * 14 + intense * 8 + min(len(t) / 30, 15)))
+    category = "chinese_specific" if any(w in t for w in CHINESE_SPECIFIC) else "basic"
+    intensity = min(100, int(20 + max(neg, pos) * 14 + marks * 8 + min(len(t) / 30, 15)))
     valence = -2 if neg > pos * 2 else (-1 if neg > pos else (1 if pos > neg else 0))
+    arousal = max(-2, min(2, (-1 if any(w in t for w in ["累", "疲惫", "无力", "麻木"]) else 0)
+                          + (1 if marks >= 1 else 0) + (1 if intensity >= 70 else 0)))
+    state_changes = [f"{name}变化" for name, words in STATE_WORDS if any(w in t for w in words)]
+    coping = "venting" if (neg and len(t) > 50) else ("rumination" if t.count("为什么") >= 2 else "none")
     if risk == "high":
         role, emotion, intensity, valence = "soother", "绝望", min(100, intensity + 30), -2
     elif neg >= 2 and intensity >= 60:
@@ -369,8 +393,10 @@ def heuristic_scan(text: str) -> dict:
     else:
         role = "talker"
     return {
-        "emotion": emotion, "intensity": intensity, "valence": valence,
-        "topics": [], "role": role, "risk": risk,
+        "emotion": emotion, "category": category, "intensity": intensity, "valence": valence,
+        "arousal": arousal, "topics": [], "coping": coping, "role": role, "risk": risk,
+        "risk_signals": (["规则引擎命中危机词"] if risk in ("mid", "high") else []),
+        "state_changes": state_changes,
         "one_line": "（规则分析）" + ("情绪强烈" if intensity >= 70 else "常规交流"),
     }
 
@@ -396,12 +422,22 @@ def digest_persona(persona: dict) -> str:
     if persona.get("version", 0) == 0:
         return "（你们还不太熟，正在慢慢了解 TA——多听多记，别急着下判断。）"
     lines = []
-    if persona.get("summary"):
+    if persona.get("summary_plain"):
+        lines.append("TA 现在的样子：" + persona["summary_plain"])
+    elif persona.get("summary"):
         lines.append("一句话画像：" + persona["summary"])
+    b5 = persona.get("big5") or {}
+    scores = {d: (v.get("score") if isinstance(v, dict) else v) for d, v in b5.items()}
+    notable = [d for d, s in scores.items() if isinstance(s, int) and (s >= 65 or s <= 35)]
+    if notable:
+        lines.append("画像侧写：" + "、".join(f"{d}{scores[d]}" for d in notable))
+    sig = persona.get("signals") or {}
+    hot = [k for k, v in sig.items() if isinstance(v, dict) and v.get("score", 0) >= 55]
+    if hot:
+        label = {"low_mood": "低落信号", "anxiety": "焦虑信号", "stress": "压力信号"}
+        lines.append("近期要留意的：" + "、".join(label.get(k, k) for k in hot) + "（是信号不是诊断，陪伴优先）")
     if persona.get("traits"):
         lines.append("核心特质：" + "、".join(t.get("label", "") for t in persona["traits"][:6]))
-    if persona.get("emotional_baseline"):
-        lines.append("情绪基调：" + persona["emotional_baseline"])
     for key, label in [("care_about", "TA 在意"), ("stressors", "TA 的压力源"),
                        ("energy_sources", "TA 的能量来源"), ("communication_prefs", "沟通偏好")]:
         v = persona.get(key) or []
@@ -409,7 +445,7 @@ def digest_persona(persona: dict) -> str:
             lines.append(f"{label}：" + "；".join(str(x) for x in v[:5]))
     if persona.get("ai_notes"):
         lines.append("（给你自己的备忘：" + persona["ai_notes"] + "）")
-    return "\n".join(lines)[:900]
+    return "\n".join(lines)[:1000]
 
 
 def build_system_prompt(persona, summaries, role_key, scan, friend_name="树洞"):
@@ -443,114 +479,285 @@ def build_messages(sess: dict, system_prompt: str, window=24):
 
 
 # ---------------------------------------------------------------------------
-# 会话小结（每 8 轮自动）
+# 会话分析师 v2（每 8 轮：小结 + 情绪轨迹 + 可累积观察证据）
 # ---------------------------------------------------------------------------
-SUMMARY_PROMPT = """把下面这段树洞对话浓缩成 3~5 条要点小结，供以后回忆时快速了解这次聊了什么。每条一行，不要编号前缀。覆盖：聊了什么事、TA 的情绪状态、你给了什么陪伴/观点、有没有聊到一半没聊完的话题。直接输出小结，不要标题不要客套。"""
+MICRO_PROMPT = """你是树洞的会话分析师。基于一段对话输出 JSON（不要多余文字）：
+{"summary":"3~5条要点，每条一行，覆盖：聊了什么/情绪如何/树洞给了什么陪伴/未聊完的话",
+ "emotion_start":"开场主导情绪","emotion_end":"收尾主导情绪","improved":true或false,
+ "themes":["这次的主题,≤3"],"coping_observed":["观察到的应对方式,≤3"],
+ "observations":[最多4条 {"content":"一条可长期累积的观察（事实层面，不是推论）",
+   "quote":"≤40字原话依据","domain":"情绪|人际|工作学习|自我|睡眠健康|其他",
+   "state_or_trait":"state（这轮的状态）或 trait（稳定特质线索）","confidence":"高|中|低"}]}
+铁律：observations 只记对话里真实出现的；引号必须是 TA 的原话或近似原话；拿不准 confidence=低。"""
 
 
-async def summarize_session(llm: LLM, sess: dict) -> str:
+async def summarize_session(llm: LLM, sess: dict) -> dict:
+    """返回 {"summary": str, "observations": [...]}；解析失败时 observations 为空"""
+    fallback_text = sess.get("summary", "") or "-（本次小结生成失败，不影响对话）"
+    if MOCK:
+        return {"summary": "- mock 小结\n- TA 情绪平稳",
+                "observations": [{"content": "mock 观察", "quote": "mock", "domain": "其他",
+                                  "state_or_trait": "state", "confidence": "低"}]}
     convo = "\n".join(
         f"{'我' if m['role'] == 'user' else '树洞'}：{m['content']}" for m in sess["messages"][-40:]
     )
-    if MOCK:
-        return "- mock 小结一条\n- TA 情绪平稳"
     try:
         out = await llm.chat_once(
-            [
-                {"role": "system", "content": SUMMARY_PROMPT},
-                {"role": "user", "content": convo[:8000]},
-            ],
-            model=llm.fast_model, temperature=0.4, max_tokens=1500, thinking=False,
+            [{"role": "system", "content": MICRO_PROMPT},
+             {"role": "user", "content": convo[:8000]}],
+            model=llm.fast_model, temperature=0.3, max_tokens=2000, thinking=False,
         )
-        return out.strip()[:1200]
+        data = extract_json(out)
+        if isinstance(data, dict) and data.get("summary"):
+            obs = []
+            for o in (data.get("observations") or [])[:4]:
+                if isinstance(o, dict) and o.get("content"):
+                    obs.append({
+                        "content": str(o.get("content", ""))[:80],
+                        "quote": str(o.get("quote", ""))[:40],
+                        "domain": o.get("domain") if o.get("domain") in
+                                  {"情绪", "人际", "工作学习", "自我", "睡眠健康", "其他"} else "其他",
+                        "state_or_trait": "trait" if o.get("state_or_trait") == "trait" else "state",
+                        "confidence": o.get("confidence") if o.get("confidence") in {"高", "中", "低"} else "低",
+                    })
+            return {"summary": str(data["summary"])[:1200], "observations": obs,
+                    "emotion_start": str(data.get("emotion_start", ""))[:6],
+                    "emotion_end": str(data.get("emotion_end", ""))[:6],
+                    "improved": bool(data.get("improved"))}
+        return {"summary": fallback_text, "observations": []}
     except Exception as e:
-        log.warning("会话小结失败: %s", e)
-        return sess.get("summary", "")
+        log.warning("会话分析失败: %s", e)
+        return {"summary": fallback_text, "observations": []}
 
 
 # ---------------------------------------------------------------------------
-# 深度人格分析
+# 深度人格分析 v2：评估员 → 审核员 双 pass + 代码层收缩融合
 # ---------------------------------------------------------------------------
-DEEP_PROMPT = """你是树洞的人格分析引擎。输入是：当前人格画像 + 最近的对话小结与原始对话片段。
-任务：更新对 TA 的人格画像。只输出一个 JSON 对象，不要任何多余文字。
+DEEP_PROMPT = """你是资深心理评估专家，为树洞维护对 TA 的长期理解档案。科学立场：大五人格框架（含层面 facets）、情绪环形模型、压力-应对理论；筛查信号参考 PHQ/GAD 思路但明确【不是诊断】。
+输入：现档案 + 证据台账（历次会话累积的观察）+ 最近会话小结。在旧档案基础上演化，不要推倒重来。只输出 JSON：
 
-要求：
-- 所有判断必须有对话依据，宁可保守不要臆断；证据用 TA 原话或近似原话（每条 ≤40 字）
-- 在旧画像基础上「演化」，不要推倒重来；新信息与旧画像冲突时以新信息为准并更新
-- 信息不足的字段沿用旧值；openness/conscientiousness/extraversion/agreeableness/neuroticism 输出 0-100 估分
-- traits 是最有区分度的 3~6 个特质标签（如"高敏感""报喜不报忧""对认可敏感"），别用万金油词
-- communication_prefs 写你陪 TA 聊天时最该注意的事（从 TA 的反应里学到的）
-- ai_notes 是你写给自己的备忘：怎么陪这个人最好
+{"summary_plain":"80字内大白话画像——像朋友聊起 TA，零术语",
+ "summary_pro":"60字内专业概括，可用术语",
+ "big5":{"神经质":{"score":0-100,"confidence":"高|中|低","plain":"一句白话解释这个维度上的表现",
+    "facets":{"焦虑|抑郁|冲动等1-3个层面":{"score":0-100,"evidence":"≤30字依据"}}},
+   "外向性":{...同结构},"开放性":{...},"宜人性":{...},"尽责性":{...}},
+ "signals":{"low_mood":{"score":0-100,"trend":"up|flat|down","evidence":"..."},
+   "anxiety":{"score":0-100,"trend":"...","evidence":"..."},
+   "stress":{"score":0-100,"trend":"...","evidence":"..."}},
+ "patterns":[{"name":"≤8字的行为/思维模式","plain":"白话解释","evidence":"原话或事实"}],
+ "triggers":["最近的具体触发点"],"protective":["保护性资源/支持"],
+ "traits":[{"label":"特质","score":0-100,"evidence":"...","state_or_trait":"state|trait"}],
+ "care_about":[],"stressors":[],"energy_sources":[],"communication_prefs":[],
+ "memorable_quotes":["≤3条"],"ai_notes":"给树洞自己的陪伴备忘，白话，80字内"}
 
-输出格式：
-{"summary":"一句话画像,60字内",
- "traits":[{"label":"特质","score":0-100,"evidence":"对话依据"}],
- "big5":{"开放性":0,"尽责性":0,"外向性":0,"宜人性":0,"神经质":0},
- "emotional_baseline":"近期情绪基调,60字内",
- "care_about":["..."],"stressors":["..."],"energy_sources":["..."],
- "communication_prefs":["..."],"memorable_quotes":["TA 说过的让你印象深刻的话,最多3条"],
- "ai_notes":"写给树洞自己的陪伴备忘,80字内"}"""
+铁律：
+1) 一切判断必须有台账/小结证据；证据不足 → confidence=低 且 score 向 50 靠拢
+2) 区分状态与特质：最近一两周的低落是 state（写进 signals），反复数周以上的模式才进 big5/traits 的 trait
+3) signals 措辞只能是"信号/倾向"，绝不出现诊断、病症名（可以说"低落信号明显"）
+4) summary_plain/patterns.plain/ai_notes 是给 TA 本人看的，禁止术语或术语后立刻跟人话
+5) 没有新证据的维度沿用旧值"""
 
-DEEP_INPUT_MAX = 12000
+CRITIC_PROMPT = """你是苛刻的复核编辑。下面是一份对用户的心理评估 JSON 和它的证据材料。找出问题，只输出 JSON：
+{"verdicts":[{"path":"如 big5.神经质.score 或 signals.low_mood.score","action":"adjust|flag",
+   "new_value":调整后的分数或null,"reason":"≤40字"}],
+ "unsupported":["证据对不上/以偏概全（把短期状态当稳定特质）/越界诊断的字段路径"],
+ "missing":["证据材料里有、但评估漏掉的重要信号"]}
+苛刻标准：引号对不上原文的、单次事件推出稳定结论的、出现诊断措辞的、分数极端（<20或>80）但证据单薄的——全部 adjust 或 flag。最多 10 条。"""
+
+
+DEEP_INPUT_MAX = 14000
+
+
+def _shrink(old_val, new_val, confidence: str) -> int:
+    """证据置信度越低，新估计越向旧值收缩（±15/±25/自由 三档），防画像抖动"""
+    try:
+        old_val, new_val = int(old_val), int(new_val)
+    except Exception:
+        return new_val if isinstance(new_val, int) else 50
+    cap = {"低": 15, "中": 25}.get(confidence, 40)
+    return max(0, min(100, old_val + max(-cap, min(cap, new_val - old_val))))
+
+
+def _merge_big5(old_b5, new_b5) -> dict:
+    """big5 v2 结构融合：分数按置信度收缩，旧结构(int)自动升级"""
+    out = {}
+    for domain in ["神经质", "外向性", "开放性", "宜人性", "尽责性"]:
+        nv = (new_b5 or {}).get(domain)
+        ov = old_b5.get(domain) if isinstance(old_b5, dict) else None
+        old_score = ov.get("score") if isinstance(ov, dict) else (ov if isinstance(ov, int) else None)
+        if not isinstance(nv, dict):
+            # 模型没给新值：沿用旧值（升级结构）
+            out[domain] = ov if isinstance(ov, dict) else {"score": old_score or 50, "confidence": "低", "facets": {}}
+            continue
+        conf = nv.get("confidence") if nv.get("confidence") in {"高", "中", "低"} else "低"
+        score = _clamp(nv.get("score"), 0, 100, 50)
+        if isinstance(old_score, int):
+            score = _shrink(old_score, score, conf)
+        facets = {}
+        for fname, fval in (nv.get("facets") or {}).items():
+            if isinstance(fval, dict):
+                facets[str(fname)[:8]] = {"score": _clamp(fval.get("score"), 0, 100, 50),
+                                          "evidence": str(fval.get("evidence", ""))[:40]}
+        out[domain] = {"score": score, "confidence": conf,
+                       "plain": str(nv.get("plain", ""))[:60], "facets": facets}
+    return out
 
 
 async def deep_analyze(llm: LLM, persona: dict, summaries: list, recent_msgs: list) -> dict:
-    """返回模型输出的新画像字段 dict；失败返回空 dict"""
+    """双 pass：评估员产出 → 审核员纠偏 → 代码层收缩融合。失败返回空 dict"""
     if MOCK:
         return {
-            "summary": "MOCK 画像：一位正在被认真倾听的人",
-            "traits": [{"label": "愿意表达", "score": 70, "evidence": "mock"}],
-            "big5": {"开放性": 70, "尽责性": 60, "外向性": 50, "宜人性": 75, "神经质": 45},
-            "emotional_baseline": "整体平稳，偶有波动",
+            "summary_plain": "MOCK：一位正在被认真倾听的人，愿意把心事说出口。",
+            "summary_pro": "MOCK：表达意愿正常，情绪以状态性波动为主。",
+            "big5": {d: {"score": 55, "confidence": "低", "plain": "mock", "facets": {}}
+                     for d in ["神经质", "外向性", "开放性", "宜人性", "尽责性"]},
+            "signals": {k: {"score": 20, "trend": "flat", "evidence": "mock"}
+                        for k in ["low_mood", "anxiety", "stress"]},
+            "patterns": [], "triggers": [], "protective": [],
+            "traits": [{"label": "愿意表达", "score": 70, "evidence": "mock", "state_or_trait": "state"}],
             "care_about": ["mock"], "stressors": [], "energy_sources": [],
             "communication_prefs": ["先共情再建议"],
             "memorable_quotes": [], "ai_notes": "mock 模式生成的画像",
         }
-    old = {k: persona.get(k) for k in ["summary", "traits", "big5", "emotional_baseline",
-                                       "care_about", "stressors", "energy_sources",
+    ledger = persona.get("evidence_ledger", [])[-60:]
+    old = {k: persona.get(k) for k in ["summary_plain", "summary", "big5", "signals", "patterns",
+                                       "traits", "care_about", "stressors", "energy_sources",
                                        "communication_prefs", "memorable_quotes", "ai_notes"]}
-    parts = [f"当前画像（v{persona.get('version', 0)}）：\n{json.dumps(old, ensure_ascii=False)}"]
+    parts = [f"现档案（v{persona.get('version', 0)}）：\n{json.dumps(old, ensure_ascii=False)}"]
+    if ledger:
+        parts.append("证据台账（时间升序，state=状态 trait=特质线索）：\n" + "\n".join(
+            f"· [{o.get('date', '')[:10]}][{o.get('domain', '')}][{o.get('state_or_trait', '')}/{o.get('confidence', '')}]"
+            f"{o.get('content', '')}｜原话：{o.get('quote', '')}" for o in ledger))
     if summaries:
-        parts.append("最近对话小结：\n" + "\n\n".join(
+        parts.append("最近会话小结：\n" + "\n\n".join(
             f"· {s['started'][:16]}（{s['title']}）：{s['summary']}" for s in summaries))
     if recent_msgs:
         parts.append("最近原始对话片段：\n" + "\n".join(
-            f"{'我' if m['role'] == 'user' else '树洞'}：{m['content']}" for m in recent_msgs[-60:]))
+            f"{'我' if m['role'] == 'user' else '树洞'}：{m['content']}" for m in recent_msgs[-40:]))
+    user_input = "\n\n".join(parts)[:DEEP_INPUT_MAX]
     try:
-        out = await llm.chat_once(
-            [{"role": "system", "content": DEEP_PROMPT},
-             {"role": "user", "content": "\n\n".join(parts)[:DEEP_INPUT_MAX]}],
+        # Pass 1：评估员（重任务，开思考）
+        out1 = await llm.chat_once(
+            [{"role": "system", "content": DEEP_PROMPT}, {"role": "user", "content": user_input}],
             model=llm.model, temperature=0.3, max_tokens=8000,
         )
-        data = extract_json(out)
+        data = extract_json(out1)
         if not isinstance(data, dict):
-            log.warning("深度分析输出无法解析，原始输出: %s", (out or "")[:300])
-        return data if isinstance(data, dict) else {}
+            log.warning("深度分析 Pass1 无法解析: %s", (out1 or "")[:300])
+            return {}
+        # Pass 2：审核员（轻量快速）
+        try:
+            critique_input = (f"评估 JSON：\n{json.dumps(data, ensure_ascii=False)}\n\n"
+                              f"证据材料：\n{user_input[:DEEP_INPUT_MAX // 2]}")
+            out2 = await llm.chat_once(
+                [{"role": "system", "content": CRITIC_PROMPT}, {"role": "user", "content": critique_input}],
+                model=llm.fast_model, temperature=0.2, max_tokens=1500, thinking=False,
+            )
+            crit = extract_json(out2)
+            if isinstance(crit, dict):
+                for v in (crit.get("verdicts") or [])[:10]:
+                    path, action = v.get("path", ""), v.get("action")
+                    if action == "adjust" and v.get("new_value") is not None:
+                        _apply_path(data, path, v["new_value"])
+                for path in (crit.get("unsupported") or [])[:6]:
+                    _flag_path(data, path)
+                if crit.get("unsupported"):
+                    data["_critique"] = f"复核标记 {len(crit['unsupported'])} 处证据不足，已降置信"
+                if crit.get("missing"):
+                    data["_missing"] = [str(m)[:40] for m in crit["missing"][:3]]
+        except Exception as e:
+            log.warning("审核 pass 失败（不影响主结果）: %s", e)
+        # 代码层融合：big5 收缩 + 旧结构升级
+        data["big5"] = _merge_big5(persona.get("big5"), data.get("big5"))
+        return data
     except Exception as e:
         log.warning("深度人格分析失败: %s", e)
         return {}
 
 
+def _apply_path(data: dict, path: str, value):
+    try:
+        keys = [k for k in path.replace("]", "").split("[") if k]
+        keys = ".".join(keys).split(".")
+        node = data
+        for k in keys[:-1]:
+            if not isinstance(node, dict) or k not in node:
+                return
+            node = node[k]
+        last = keys[-1]
+        if isinstance(node, dict) and last in node:
+            if isinstance(node[last], dict) and isinstance(value, (int, float)):
+                node[last]["score"] = _clamp(value, 0, 100, node[last].get("score", 50))
+            else:
+                node[last] = value
+    except Exception:
+        pass
+
+
+def _flag_path(data: dict, path: str):
+    _apply_path_confidence(data, path, "低")
+
+
+def _apply_path_confidence(data: dict, path: str, conf: str):
+    try:
+        keys = [k for k in path.replace("]", "").split("[") if k]
+        keys = ".".join(keys).split(".")
+        node = data
+        for k in keys[:-1]:
+            if not isinstance(node, dict) or k not in node:
+                return
+            node = node[k]
+        last = keys[-1]
+        if isinstance(node, dict) and isinstance(node.get(last), dict):
+            node[last]["confidence"] = conf
+    except Exception:
+        pass
+
+
 def persona_digest_lines(new_fields: dict) -> list:
-    """画像更新 → 飞书人格文档的快照行"""
-    lines = [new_fields.get("summary", "")]
-    lines.append("# 核心特质")
-    for t in (new_fields.get("traits") or [])[:6]:
-        lines.append(f"{t.get('label')}（{t.get('score')}）—— 依据：{t.get('evidence')}")
+    """画像更新 → 飞书人格文档的快照行（白话优先，专业为辅）"""
+    lines = [new_fields.get("summary_plain") or new_fields.get("summary", "")]
+    if new_fields.get("summary_pro"):
+        lines.append("（专业概括：" + new_fields["summary_pro"] + "）")
     b5 = new_fields.get("big5") or {}
     if b5:
-        lines.append("# 大五人格估分")
-        lines.append(" · ".join(f"{k} {v}" for k, v in b5.items()))
-    if new_fields.get("emotional_baseline"):
-        lines.append("# 情绪基调")
-        lines.append(new_fields["emotional_baseline"])
-    for key, label in [("care_about", "在意的人和事"), ("stressors", "压力源"),
-                       ("energy_sources", "能量来源"), ("communication_prefs", "偏好的沟通方式"),
-                       ("memorable_quotes", "说过的话")]:
+        lines.append("# 大五人格（含白话）")
+        for d, v in b5.items():
+            if isinstance(v, dict):
+                line = f"{d} {v.get('score')}"
+                if v.get("plain"):
+                    line += f" —— {v['plain']}"
+                if v.get("confidence") == "低":
+                    line += "（证据还少，先看看）"
+                lines.append(line)
+                for fname, fval in (v.get("facets") or {}).items():
+                    if isinstance(fval, dict):
+                        lines.append(f"　· {fname} {fval.get('score')}（依据：{fval.get('evidence', '')}）")
+    sig = new_fields.get("signals") or {}
+    if sig:
+        lines.append("# 情绪信号（筛查参考，不是诊断）")
+        label = {"low_mood": "低落", "anxiety": "焦虑", "stress": "压力"}
+        trend_cn = {"up": "↑上升", "flat": "→平稳", "down": "↓缓解"}
+        for k, v in sig.items():
+            if isinstance(v, dict):
+                lines.append(f"{label.get(k, k)} {v.get('score')} {trend_cn.get(v.get('trend'), '')}（{v.get('evidence', '')}）")
+    for key, title in [("patterns", "# 反复出现的模式"), ("triggers", "# 近期触发点"),
+                       ("protective", "# 保护性资源"), ("care_about", "# 在意的人和事"),
+                       ("stressors", "# 压力源"), ("energy_sources", "# 能量来源"),
+                       ("communication_prefs", "# 偏好的沟通方式"), ("memorable_quotes", "# 说过的、树洞记住了的话")]:
         v = new_fields.get(key) or []
         if v:
-            lines.append(f"# {label}")
-            lines.extend(v[:5])
+            lines.append(title)
+            if key == "patterns":
+                lines.extend(f"{p.get('name')}：{p.get('plain')}（{p.get('evidence', '')}）"
+                             for p in v[:5] if isinstance(p, dict))
+            else:
+                lines.extend(str(x) for x in v[:5])
+    if new_fields.get("traits"):
+        lines.append("# 核心特质")
+        for t in new_fields["traits"][:6]:
+            tag = "特质" if t.get("state_or_trait") == "trait" else "近期状态"
+            lines.append(f"{t.get('label')}（{t.get('score')}·{tag}）—— 依据：{t.get('evidence', '')}")
     if new_fields.get("ai_notes"):
         lines.append("# 树洞的陪伴备忘")
         lines.append(new_fields["ai_notes"])
