@@ -157,6 +157,20 @@ html, body { height: 100%; }
     repeating-linear-gradient(0deg, transparent 0 3px, rgba(120, 110, 90, .012) 3px 4px);
 }
 
+/* ---------- 皮肤：自定义媒体（用户上传图片/视频当背景） ---------- */
+[data-skin="custom"] {
+  --bg: #0a0f0c; --bg2: #17251d; --bg3: #101a14;
+  --panel: rgba(14, 22, 17, .68);
+  --card: rgba(18, 28, 22, .78);
+  --card2: rgba(24, 36, 28, .88);
+  --line: rgba(42, 60, 50, .8);
+  --text: #eceae0; --muted: #9aa99c; --dim: #6e7f72;
+  --accent: #a8e0b8; --accent-dim: #548a66; --warm: #e8c07d; --danger: #e08563;
+  --ub-a: #3d6b50; --ub-b: #2d5440; --ub-border: #4a7d60; --ub-text: #f2fff4;
+  --ai-bubble: rgba(16, 25, 20, .82); --ai-border: rgba(42, 60, 50, .9);
+  --glow: rgba(168, 224, 184, .28);
+}
+
 /* ============================================================
    基础布局
    ============================================================ */
@@ -171,9 +185,17 @@ body {
   transition: background .8s ease, color .4s ease;
 }
 
+/* 自定义媒体背景层：媒体(1) → 压暗纱(2) → 粒子(3) → 内容(4) */
+#media-bg { position: fixed; inset: 0; z-index: 1; pointer-events: none; overflow: hidden; background: #000; }
+#media-bg img, #media-bg video {
+  width: 100%; height: 100%; object-fit: cover; display: block;
+  transform: scale(1.08); /* 给模糊留出边缘 */
+}
+#media-dim { position: fixed; inset: 0; z-index: 2; pointer-events: none; }
+
 /* 粒子画布：背景之上、内容之下 */
-#fx { position: fixed; inset: 0; z-index: 1; pointer-events: none; }
-#app { position: relative; z-index: 2; display: flex; flex-direction: column; height: 100vh; max-width: 980px; margin: 0 auto; zoom: var(--zoom); }
+#fx { position: fixed; inset: 0; z-index: 3; pointer-events: none; }
+#app { position: relative; z-index: 4; display: flex; flex-direction: column; height: 100vh; max-width: 980px; margin: 0 auto; zoom: var(--zoom); }
 
 /* 情绪微光纱 / 亮度纱（都在最上层但不挡交互） */
 #mood-veil, #veil-bright { position: fixed; inset: 0; pointer-events: none; z-index: 70; }
@@ -357,6 +379,11 @@ body.anims-on .msg.tree .avatar { animation: breathe 4.5s ease-in-out infinite; 
 .trait .t-ev { color: var(--dim); font-size: 12px; line-height: 1.6; }
 .chips { display: flex; flex-wrap: wrap; gap: 7px; }
 .chip { font-size: 12.5px; padding: 4px 11px; border-radius: 999px; background: var(--card); border: 1px solid var(--line); color: var(--muted); }
+.chip.on { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 8px var(--glow); }
+.chip.pick { cursor: pointer; transition: .15s; }
+.chip.pick:hover { color: var(--text); }
+.media-status { font-size: 12px; color: var(--dim); margin-top: 6px; word-break: break-all; }
+.media-btns { display: flex; gap: 8px; flex-wrap: wrap; }
 .chip.warm { border-color: rgba(184, 134, 63, .5); color: var(--warm); }
 .chip.danger { border-color: rgba(224, 133, 99, .45); color: var(--danger); }
 .ai-notes {
@@ -407,6 +434,7 @@ body.anims-on .msg.tree .avatar { animation: breathe 4.5s ease-in-out infinite; 
 .skin-prev[data-prev="valley"] { background: linear-gradient(135deg, #0c1512, #1f4436); }
 .skin-prev[data-prev="paper"] { background: linear-gradient(135deg, #f4f1e8, #e3dec9); }
 .skin-prev[data-prev="auto"] { background: linear-gradient(120deg, #f4f1e8 0%, #1f4436 34%, #eeb7c4 67%, #0d0e1f 100%); }
+.skin-prev[data-prev="custom"] { background: linear-gradient(135deg, #1a2420, #394b3f); border: 1px dashed var(--line); }
 
 .ctl-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-bottom: 1px dashed var(--line); }
 .ctl-row label { font-size: 13px; color: var(--muted); }
