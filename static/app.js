@@ -118,8 +118,14 @@ function welcome() {
   const w = el("div", "bubble-wrap");
   const now = new Date().getHours();
   const greet = now < 6 ? "夜这么深了还没睡呀" : now < 11 ? "早上好" : now < 14 ? "中午好" : now < 18 ? "下午好" : now < 23 ? "晚上好" : "夜深了";
+  const whispers = [
+    "今天也辛苦了，把没处放的情绪都放进来吧。",
+    "不管多小的事，说给我听就不算小。",
+    "你不用组织语言，想到哪说到哪就好。",
+    "这里没有评判，只有一棵很会听的树。",
+  ];
   w.appendChild(el("div", "bubble",
-    `${greet}。我是${state.friendName}，这个树洞里只有你和我会知道说过什么。\n\n开心的、难过的、说不出口的，都可以放进来。我会认真听，也会记进你的飞书云文档——越聊，我越懂你。`));
+    `${greet}。我是${state.friendName}，这个树洞里只有你和我会知道说过什么。\n\n${whispers[Math.floor(Math.random() * whispers.length)]}\n\n开心的、难过的、说不出口的，都可以放进来。我会认真听，也会记进你的飞书云文档——越聊，我越懂你。`));
   m.appendChild(el("div", "avatar", "🌳"));
   m.appendChild(w);
   chatEl.appendChild(m);
@@ -290,6 +296,7 @@ async function sendMessage() {
         if (evt.event === "scan") {
           scan = evt.data.scan;
           setMoodNow(scan, evt.data.role_label);
+          window.dispatchEvent(new CustomEvent("treehole:scan", { detail: scan }));
           // 给已渲染的用户消息补情绪标注
           if (scan && userWrapEl && !userWrapEl.querySelector(".meta-line")) {
             userWrapEl.appendChild(metaLine(scan));

@@ -4,10 +4,13 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>🌳 树洞挚友 · 把心事讲给树洞听</title>
-<link rel="stylesheet" href="/static/style.css?v=3">
+<link rel="stylesheet" href="/static/style.css?v=4">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌳</text></svg>">
 </head>
 <body>
+<canvas id="fx"></canvas>
+<div id="mood-veil"></div>
+<div id="veil-bright"></div>
 <div id="app">
 
   <header class="topbar">
@@ -26,6 +29,7 @@
     <div class="top-actions">
       <button class="btn ghost" id="btn-persona" title="查看 TA 的人格画像">💎 画像</button>
       <button class="btn ghost" id="btn-history" title="最近的心事">🗂 心事</button>
+      <button class="btn ghost" id="btn-skin" title="皮肤与氛围">🎨 皮肤</button>
       <button class="btn ghost" id="btn-settings" title="设置">⚙️</button>
       <button class="btn primary" id="btn-new">✚ 新对话</button>
     </div>
@@ -74,6 +78,15 @@
   <div class="drawer-body" id="history-body"></div>
 </aside>
 
+<!-- 皮肤与氛围 -->
+<aside id="skin-drawer" class="skin-drawer">
+  <div class="drawer-head">
+    <b>🎨 皮肤与氛围</b>
+    <button class="btn ghost small" id="btn-close-skin">✕</button>
+  </div>
+  <div class="skin-body" id="skin-body"></div>
+</aside>
+
 <!-- 设置 -->
 <div id="modal-settings" class="modal" hidden>
   <div class="modal-card">
@@ -116,6 +129,7 @@
   </div>
 </div>
 
-<script src="/static/app.js?v=3"></script>
+<script src="/static/skins.js?v=4"></script>
+<script src="/static/app.js?v=4"></script>
 </body>
 </html>
