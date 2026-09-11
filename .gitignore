@@ -1,7 +1,7 @@
 # 密钥与运行时数据，绝不入库
 config.json
 data/
-server.log
+server*.log
 
 __pycache__/
 *.pyc
