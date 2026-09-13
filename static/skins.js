@@ -13,6 +13,8 @@ const SKINS = [
   { id: "valley", icon: "🍃", name: "青苔溪谷", desc: "薄雾与落叶", fx: ["mist", "leaves"] },
   { id: "paper",  icon: "☀️", name: "纸间日光", desc: "干净的光尘", fx: ["motes"] },
   { id: "custom", icon: "🖼️", name: "自定义", desc: "上传图片/视频当背景", fx: ["fireflies"] },
+  { id: "rain",   icon: "🌧️", name: "雨夜车窗", desc: "细雨斜落暖灯", fx: ["rain"] },
+  { id: "snow",   icon: "❄️", name: "炉边落雪", desc: "窗外静静落雪", fx: ["snow"] },
 ];
 
 const PARTICLE_CHOICES = [
@@ -252,6 +254,18 @@ const FX_SYSTEMS = {
       t: "le", x: R(0, FX.w), y: R(-FX.h, FX.h), s: R(5, 10), vy: R(.25, .7), rot: R(0, Math.PI * 2), vr: R(-.015, .015), ph: R(0, Math.PI * 2),
     });
   },
+  rain(n) {
+    for (let i = 0; i < n; i++) FX.parts.push({
+      t: "ra", x: R(-40, FX.w + 40), y: R(-FX.h, FX.h), len: R(10, 22),
+      vy: R(9, 16), vx: R(-1.6, -.8), a: R(.15, .4),
+    });
+  },
+  snow(n) {
+    for (let i = 0; i < n; i++) FX.parts.push({
+      t: "sn", x: R(0, FX.w), y: R(-FX.h, FX.h), r: R(1, 3.2),
+      vy: R(.5, 1.3), ph: R(0, Math.PI * 2), a: R(.4, .85),
+    });
+  },
   mist(n) {
     for (let i = 0; i < n; i++) FX.parts.push({
       t: "mi", x: R(0, FX.w), y: R(FX.h * .25, FX.h), r: R(120, 260),
@@ -259,7 +273,7 @@ const FX_SYSTEMS = {
     });
   },
 };
-const FX_BASE = { fireflies: 26, bubbles: 20, petals: 18, stars: 70, embers: 22, motes: 26, leaves: 12, mist: 6 };
+const FX_BASE = { fireflies: 26, bubbles: 20, petals: 18, stars: 70, embers: 22, motes: 26, leaves: 12, mist: 6, rain: 90, snow: 55 };
 
 function fxStep(dt) {
   const { ctx, w, h } = FX;
@@ -341,6 +355,20 @@ function fxStep(dt) {
         const g = ctx.createRadialGradient(p.x, p.y, 0, p.x, p.y, p.r);
         g.addColorStop(0, `rgba(200,230,215,${p.a})`); g.addColorStop(1, "transparent");
         ctx.fillStyle = g; ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
+        break;
+      }
+      case "ra": {
+        p.y += p.vy * dt * 60; p.x += p.vx * dt * 60;
+        if (p.y > FX.h + 24) { p.y = -24; p.x = R(-40, FX.w + 40); }
+        ctx.strokeStyle = `rgba(175,205,225,${p.a})`; ctx.lineWidth = 1;
+        ctx.beginPath(); ctx.moveTo(p.x, p.y); ctx.lineTo(p.x - p.vx * 2.2, p.y - p.len); ctx.stroke();
+        break;
+      }
+      case "sn": {
+        p.y += p.vy * dt * 60; p.x += Math.sin(p.ph += .01 * dt * 60) * .5;
+        if (p.y > FX.h + 6) { p.y = -6; p.x = R(0, FX.w); }
+        ctx.fillStyle = `rgba(240,245,250,${p.a})`;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 7); ctx.fill();
         break;
       }
       case "shoot": {

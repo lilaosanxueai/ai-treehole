@@ -26,6 +26,7 @@ from pydantic import BaseModel
 
 import brain
 import feishu
+import memory
 import store
 from brain import LLM, ROLES
 
@@ -59,6 +60,7 @@ DEFAULT_CONFIG = {
         "access_token": "",    # 局域网访问令牌（开启 lan 时自动生成）
     },
     "friend_name": "树洞",
+    "friend_style": "classic",
 }
 
 
@@ -271,8 +273,11 @@ async def api_chat(body: ChatIn):
         yield _sse("scan", {"scan": scan, "role": role, "role_label": ROLES.get(role, {}).get("label", role)})
 
         # 2) 组装提示词，流式回复
+        memories = memory.search(text, k=5)
         system = brain.build_system_prompt(
-            store.load_persona(), summaries, role, scan, CFG.get("friend_name", "树洞")
+            store.load_persona(), summaries, role, scan, CFG.get("friend_name", "树洞"),
+            memories=memories, pending=memory.pending_promises(3),
+            style=CFG.get("friend_style", "classic"),
         )
         sess["messages"].append({"role": "user", "content": text,
                                  "ts": store.now_iso(), "scan": scan, "role": role})
@@ -351,6 +356,12 @@ async def _finalize(session_id: str, doc: dict):
                 store.save_session(sess)
                 if micro.get("observations"):
                     store.append_observations(micro["observations"])
+                try:
+                    added = await memory.extract_from_session(llm, sess)
+                    if added:
+                        log.info("长期记忆新增 %d 条", added)
+                except Exception as e:
+                    log.warning("记忆提取失败: %s", e)
                 if doc.get("token"):
                     await writer.enqueue(
                         doc["token"],
@@ -544,6 +555,54 @@ async def api_persona_refresh():
 
 
 # ---------------------------------------------------------------------------
+# 长期记忆 / 那年今日 / 数据导出
+# ---------------------------------------------------------------------------
+@app.get("/api/memories")
+async def api_memories():
+    items = memory.load()["items"]
+    return {"ok": True, "items": items[-80:][::-1],
+            "pending": memory.pending_promises(20)}
+
+
+class MemoryDoneIn(BaseModel):
+    content: str
+
+
+@app.post("/api/memories/done")
+async def api_memory_done(body: MemoryDoneIn):
+    ok = memory.mark_done(body.content)
+    return {"ok": ok, "msg": "" if ok else "没找到这条约定"}
+
+
+@app.get("/api/recall")
+async def api_recall():
+    """那年今日：给欢迎语补一条旧回忆"""
+    return {"ok": True, "recall": memory.recall_card()}
+
+
+@app.get("/api/export")
+async def api_export():
+    """一键导出全部数据（会话/画像/记忆）为 JSON"""
+    def _collect():
+        sessions = []
+        for meta in store.list_sessions(1000):
+            s = store.load_session(meta["id"])
+            if s:
+                sessions.append(s)
+        return {
+            "exported_at": store.now_iso(),
+            "app": "ai-treehole",
+            "persona": store.load_persona(),
+            "memory": memory.load(),
+            "sessions": sessions,
+        }
+    data = await asyncio.to_thread(_collect)
+    return JSONResponse(data, headers={
+        "Content-Disposition": f'attachment; filename="treehole-backup-{store.today()}.json"'
+    })
+
+
+# ---------------------------------------------------------------------------
 # 设置 / 自检
 # ---------------------------------------------------------------------------
 class ConfigIn(BaseModel):
@@ -551,6 +610,7 @@ class ConfigIn(BaseModel):
     feishu: dict = {}
     server: dict = {}
     friend_name: str = ""
+    friend_style: str = "classic"
 
 
 @app.get("/api/config")
@@ -585,6 +645,7 @@ async def api_get_config():
             "access_token": CFG["server"].get("access_token", ""),
         },
         "friend_name": CFG.get("friend_name", "树洞"),
+        "friend_style": CFG.get("friend_style", "classic"),
     }
 
 
@@ -610,6 +671,8 @@ async def api_config(body: ConfigIn):
             CFG[section][k] = v
     if body.friend_name.strip():
         CFG["friend_name"] = body.friend_name.strip()
+    if body.friend_style in brain.STYLE_PROMPTS:
+        CFG["friend_style"] = body.friend_style
     if CFG["server"].get("lan") and not CFG["server"].get("access_token"):
         import secrets
         CFG["server"]["access_token"] = secrets.token_hex(4)

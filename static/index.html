@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>🌳 树洞挚友 · 把心事讲给树洞听</title>
-<link rel="stylesheet" href="/static/style.css?v=6">
+<link rel="stylesheet" href="/static/style.css?v=7">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌳</text></svg>">
 </head>
 <body>
@@ -127,8 +127,14 @@
         <span class="test-result" id="test-feishu-result"></span>
       </section>
       <section>
-        <h3>🌳 挚友昵称</h3>
-        <label>TA 怎么称呼你<input id="set-name" placeholder="树洞"></label>
+        <h3>🌳 挚友人设</h3>
+        <label>昵称<input id="set-name" placeholder="树洞"></label>
+        <label>性格配方<select id="set-style">
+          <option value="classic">🌿 树洞本洞（默认）</option>
+          <option value="gentle">🌸 温柔款·再软一度</option>
+          <option value="straight">🌶️ 直友款·敢说真话</option>
+          <option value="sage">🍵 智者款·比喻与留白</option>
+        </select></label>
         <label class="check"><input id="set-autotts" type="checkbox"> 自动朗读树洞的回复（本地语音合成）</label>
       </section>
       <section>
@@ -137,6 +143,7 @@
         <label>访问令牌（自动生成，也可自定义）<input id="set-token" placeholder="自动生成"></label>
         <div class="media-btns">
           <button class="btn ghost small" id="btn-qr">显示连接二维码</button>
+          <button class="btn ghost small" id="btn-export">导出我的全部数据</button>
         </div>
         <div id="qr-box" class="qr-box" hidden></div>
       </section>
@@ -152,7 +159,7 @@
   </div>
 </div>
 
-<script src="/static/skins.js?v=6"></script>
-<script src="/static/app.js?v=6"></script>
+<script src="/static/skins.js?v=7"></script>
+<script src="/static/app.js?v=7"></script>
 </body>
 </html>

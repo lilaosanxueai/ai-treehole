@@ -1,0 +1,27 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      - name: 编译检查
+        run: python -m py_compile app.py brain.py feishu.py store.py memory.py
+      - name: JS 语法检查
+        run: |
+          node -e "new Function(require('fs').readFileSync('static/app.js','utf8'));new Function(require('fs').readFileSync('static/skins.js','utf8'));console.log('js OK')"
+      - name: MOCK 自检
+        run: TREEHOLE_MOCK=1 python app.py --check
+      - name: 冒烟测试（MOCK 服务端到端）
+        run: |
+          TREEHOLE_MOCK=1 python app.py --no-browser &
+          sleep 6
+          python _smoke_test.py

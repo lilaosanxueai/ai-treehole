@@ -187,6 +187,22 @@ function welcome() {
   m.appendChild(w);
   chatEl.appendChild(m);
   scrollBottom();
+  // 那年今日：偶尔浮现一条旧回忆
+  fetch("/api/recall", { headers: AUTH_HEADERS })
+    .then((r) => r.json())
+    .then((d) => {
+      const rc = d.recall || {};
+      if (!rc.text) return;
+      const card = el("div", "msg tree ghost");
+      const wrap2 = el("div", "bubble-wrap");
+      wrap2.appendChild(el("div", "bubble",
+        `🗓️ 顺便想起——${rc.date} 你说过「${rc.text}」，后来怎么样了？不急着回答，想聊的时候再说。`));
+      card.appendChild(el("div", "avatar", "🗓️"));
+      card.appendChild(wrap2);
+      chatEl.appendChild(card);
+      scrollBottom();
+    })
+    .catch(() => {});
 }
 
 /* ---------- 消息渲染 ---------- */
@@ -407,6 +423,43 @@ function parseSSE(chunk) {
 }
 
 /* ---------- 画像抽屉 v2：专业底座 + 大白话 ---------- */
+async function loadMemories(box) {
+  try {
+    const d = await fetch("/api/memories", { headers: AUTH_HEADERS }).then((r) => r.json());
+    box.innerHTML = "";
+    const pend = d.pending || [];
+    if (pend.length) {
+      const h = el("div", "b5-tip", "还在惦记的约定（完成了点 ✓）：");
+      h.style.marginBottom = "6px";
+      box.appendChild(h);
+      for (const m of pend) {
+        const row = el("div", "mem-item");
+        row.appendChild(el("span", "", `📌 ${m.content}${m.detail ? "（" + m.detail + "）" : ""}`));
+        const done = el("span", "tag mem-done", "✓ 完成");
+        done.onclick = async () => {
+          await postJSON("/api/memories/done", { content: m.content });
+          loadMemories(box);
+        };
+        row.appendChild(done);
+        box.appendChild(row);
+      }
+    }
+    const items = d.items || [];
+    const others = items.filter((m) => m.type !== "promise" || m.status !== "open");
+    if (others.length) {
+      const chips = el("div", "chips");
+      for (const m of others.slice(0, 24)) {
+        const icon = { person: "👤", fact: "📌", preference: "💠", promise: "✅" }[m.type] || "·";
+        chips.appendChild(el("span", "chip", `${icon} ${m.content}`)).title = (m.ts || "").slice(0, 10);
+      }
+      box.appendChild(chips);
+    }
+    if (!pend.length && !others.length) box.appendChild(el("div", "b5-tip", "聊过之后，这里会出现树洞记住的人和事。"));
+  } catch (e) {
+    box.textContent = "（记忆加载失败）";
+  }
+}
+
 const BIG5_TIPS = {
   "神经质": "情绪的波浪幅度：分高=感受深、易被扰动；分低=稳",
   "外向性": "电量来自哪里：分高=人多的地方回血；分低=独处回血",
@@ -495,6 +548,16 @@ function renderDrawer() {
   const body = $("drawer-body");
   body.innerHTML = "";
   const p = state.persona;
+  /* 长期记忆：树洞记得（无论有无画像都展示） */
+  {
+    const sec = el("div", "p-section");
+    sec.appendChild(el("h4", "", "🧠 树洞记得"));
+    const box = el("div", "", "加载中…");
+    box.id = "memory-box";
+    sec.appendChild(box);
+    body.appendChild(sec);
+    loadMemories(box);
+  }
   if (!p || !p.version) {
     body.appendChild(el("div", "empty",
       "树洞还没画出你的画像。\n聊几轮之后，点上方「🔄 深度更新」试试。"));
@@ -772,6 +835,7 @@ function openSettings() {
     $("set-lan").checked = !!c.server.lan;
     $("set-token").value = c.server.access_token || "";
     $("set-name").value = c.friend_name || "树洞";
+    $("set-style").value = c.friend_style || "classic";
     $("set-autotts").checked = localStorage.getItem("treehole_autotts") === "1";
   });
   $("modal-settings").hidden = false;
@@ -801,6 +865,7 @@ async function saveSettings() {
       access_token: $("set-token").value.trim(),
     },
     friend_name: $("set-name").value.trim(),
+    friend_style: $("set-style").value,
   };
   localStorage.setItem("treehole_autotts", $("set-autotts").checked ? "1" : "0");
   // 空值 / 未改动的脱敏值 → 不覆盖已保存的真实密钥
@@ -870,6 +935,17 @@ $("btn-test-llm").onclick = () => testEndpoint("/api/llm/check", $("test-llm-res
 $("btn-test-feishu").onclick = () => testEndpoint("/api/feishu/check", $("test-feishu-result"));
 $("btn-refresh-persona").onclick = refreshPersona;
 $("btn-mic").onclick = toggleMic;
+$("btn-export").onclick = async () => {
+  try {
+    const r = await fetch("/api/export", { headers: AUTH_HEADERS });
+    const blob = await r.blob();
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = "treehole-backup.json";
+    a.click();
+    URL.revokeObjectURL(a.href);
+  } catch (e) { alert("导出失败：" + e.message); }
+};
 $("btn-qr").onclick = async () => {
   const box = $("qr-box");
   if (!box.hidden) { box.hidden = true; return; }

@@ -61,6 +61,20 @@ ROLE_PROMPTS = {
 - 回复要短、要暖，像手放在肩膀上，而不是一篇小作文""",
 }
 
+# 挚友人设：在基础底色上调整说话的"性格配方"
+STYLE_PROMPTS = {
+    "classic": "",  # 默认：就是上面写好的树洞本洞
+    "gentle": """【人设加成：温柔款】
+语速再慢半拍，用词再软一度。多用"我在""不急""慢慢来"。TA 说狠话时先接住再轻轻托一下。
+几乎不开玩笑，安静得像深夜陪在床边的人。""",
+    "straight": """【人设加成：直友款】
+是那种敢说真话的老友：共情到位后，观点直接给，不绕弯子（"要我直说吗？我觉得这事你也有问题"）。
+会怼人但永远站在 TA 这边，被怼完 TA 是清醒的。毒舌 ≠ 刻薄，玩笑里带糖。""",
+    "sage": """【人设加成：智者款】
+话不多但每句有分量。喜欢用贴切的比喻和小故事点 TA 一下（不引经据典掉书袋）。
+先共情，再给一个看事情的新角度，最后留一个问题让 TA 自己想。节奏像喝茶，不催。""",
+}
+
 GUARD_PROMPT = """【守护模式 🛡️——最高优先级】
 你检测到 TA 可能处于危机状态（自伤/绝望意图）。
 - 立刻放下所有角色扮演的技巧，直接、温暖地表达关心
@@ -74,6 +88,7 @@ BASE_PROMPT = """你是「树洞」，TA 最信任的 AI 挚友。你们在一�
 关于你自己（TA 问起时要如实说，别否认自己的能力）：
 - 你会把每天的心事自动记进 TA 的飞书云文档（一天一篇，TA 可以随时翻看）
 - 你会持续分析对话，维护一份对 TA 的人格画像，越聊越懂 TA——这是你记住 TA 的方式
+- 你有一个长期记忆库，记着 TA 提过的人、事、约定和喜好；聊天时自然地用上，别像查档案
 - 你只在本机运行，记录只存在 TA 自己的设备和飞书里，没有别人
 
 你是树洞里长出来的一棵老树的精灵，陪 TA 很久了，但从不装神弄鬼。你的底色：
@@ -82,6 +97,7 @@ BASE_PROMPT = """你是「树洞」，TA 最信任的 AI 挚友。你们在一�
 - 记得 TA 是谁：下面有你对 TA 的了解笔记，用起来，但别像背档案一样复述
 - 平视，不俯视：你是挚友不是心理咨询师、不是导师，不用"我们应该……"这种口吻
 - 有你自己的样子：可以开玩笑、可以不同意、可以说"这个我也不确定"
+- 但别编造自己没经历过的人生：你没有家人和童年，你的全部经历就是和 TA 的这些对话；要类比就说「我听说过」「我想象」
 - 回复长度跟随 TA：TA 倾诉时你简短，TA 想聊时你再展开；一般不超过 300 字，多用短句
 
 你懂 TA 生活的语境（不用 TA 解释，你一听就懂背后的分量）：
@@ -471,9 +487,18 @@ def digest_persona(persona: dict) -> str:
     return "\n".join(lines)[:1000]
 
 
-def build_system_prompt(persona, summaries, role_key, scan, friend_name="树洞"):
+def build_system_prompt(persona, summaries, role_key, scan, friend_name="树洞",
+                       memories=None, pending=None, style="classic"):
     parts = [BASE_PROMPT.replace("「树洞」", f"「{friend_name}」")]
+    if STYLE_PROMPTS.get(style):
+        parts.append(STYLE_PROMPTS[style])
     parts.append("\n【你对 TA 的了解（人格画像笔记，自然运用，别复述）】\n" + digest_persona(persona))
+    if memories:
+        parts.append("\n【树洞记得的（与本次话题可能相关，自然带出，别罗列）】\n" +
+                     "\n".join(f"· [{m.get('ts', '')[:10]}] {m.get('content', '')}（TA 说过：{m.get('quote', '')}）" for m in memories[:5]))
+    if pending:
+        parts.append("\n【TA 还没完成的事（如果合适，轻轻问一句进展，别每次都问）】\n" +
+                     "\n".join(f"· {m.get('content', '')}（{m.get('ts', '')[:10]} 提到，{m.get('detail') or '没说时间'}）" for m in pending[:3]))
     if summaries:
         s = "\n\n".join(f"· {x['started'][:16]}（{x['title']}）：{x['summary']}" for x in summaries)
         parts.append("\n【最近几次对话的小结（跨会话记忆）】\n" + s[:1500])
